@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: anti-addiction
+
+  # 文件模式 H2：进程重启数据还在，native 编译也不依赖外部数据库服务。
+  datasource:
+    url: jdbc:h2:file:./data/quizgate;AUTO_SERVER=TRUE
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+
+# 用 yml 而不是 properties：properties 按 ISO-8859-1 解码，
+# 中文默认值会被读成二次编码的乱码存进库，屏幕上看就是天书。
+quizgate:
+  # 内置题库之外，账号由环境变量喂进来；用户名留空就不建号。
+  bootstrap:
+    admin-username: ${QUIZGATE_ADMIN_USERNAME:}
+    admin-password: ${QUIZGATE_ADMIN_PASSWORD:}
+    parent-username: ${QUIZGATE_PARENT_USERNAME:}
+    parent-password: ${QUIZGATE_PARENT_PASSWORD:}
+    parent-display-name: 爸爸
+    child-name: 小一
+    child-grade: 2
+  # 家长还没配规则时的闸门默认值。刻意不给"不设限"这个选项。
+  default-grade: 2
+  default-threshold-minutes: 30
+  default-daily-limit-minutes: 120
+  default-grace-minutes: 2
+  # 拍照识题的引擎开关。默认关死：关掉之后 native 冒烟一次网都不出，
+  # "编得过、原生二进制一收请求就炸"那一类失败就不会从这条路上进来。
+  # 家长真要用识别时再 enabled=true，口令只走环境变量。
+  extractor:
+    enabled: ${QUIZGATE_EXTRACTOR_ENABLED:false}
+    # 阿里云正在把 dashscope.aliyuncs.com 迁到 {WorkspaceId}.{region}.maas.aliyuncs.com，
+    # 端点整体可覆盖，撞上新形状时改环境变量即可。
+    endpoint: ${QUIZGATE_EXTRACTOR_ENDPOINT:https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation}
+    api-key: ${DASHSCOPE_API_KEY:}
+    model: ${QUIZGATE_EXTRACTOR_MODEL:qwen-vl-max-latest}
+    # 一次识别最多收几道题：既是给模型的约束，也是硬截断。
+    max-drafts: 20
+    # 家长端传之前已经压到长边 1600 的 JPEG，正常几百 KB；这一条只挡没压的原图。
+    max-image-bytes: 4194304
+    timeout-ms: 30000

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.2</version>
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>com.sex</groupId>
+    <artifactId>anti-addiction</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>anti-addiction</name>
+    <description>anti-addiction</description>
+
+    <properties>
+        <!-- 21 而不是 25：Boot 用 maven.compiler.release=${java.version} 把语言级别交给 IDE 解析，
+             IntelliJ 2024.3 的级别表最高到 23，读到 25 会静默退回 5，模块被当成 Java 1.5 建出来
+             （IDEA 日志：Target bytecode version 5 is not supported by SDK 25）。
+             命令行 Maven + GraalVM 25 编 21 字节码没问题；IDEA 升到 2025.2+ 后可把这里改回 25。 -->
+        <java.version>21</java.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+
+        <!-- 手写 SQL + JdbcTemplate：Hibernate 在 native-image 下的增强与代理是额外风险，
+             题库这种查询形状固定的场景不需要它。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- lite 运行时：生成代码零反射，服务端 native 与安卓 APK 都吃这一个。
+             protobuf-bom 只托管 protobuf-java，javalite 要自己对齐版本。 -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-javalite</artifactId>
+            <version>${protobuf-java.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.graalvm.buildtools</groupId>
+                <artifactId>native-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>io.github.ascopes</groupId>
+                <artifactId>protobuf-maven-plugin</artifactId>
+                <configuration>
+                    <!-- 与安卓 proto 模块共用同一份 .proto，唯一事实源放在项目根。
+                         generate 目标和 protoc 版本已由 spring-boot-starter-parent 绑好。 -->
+                    <sourceDirectories>
+                        <sourceDirectory>${project.basedir}/proto</sourceDirectory>
+                    </sourceDirectories>
+                    <liteOnly>true</liteOnly>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

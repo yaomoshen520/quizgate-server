@@ -1,0 +1,51 @@
+HELP.md
+target/
+# H2 文件库：里面有令牌、口令散量和用量，任何时候都不该进版本库。
+/data/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+# native 冒烟的一次性口令库与本机凭据文件，和 /data 同理绝不进版本库。
+/data-native-smoke*/
+.smoke-env
+
+# 上面那条带斜杠的只匹配目录，真机跑出来的那几个是根目录下的散文件，名字撞不上，
+# 而里面躺着令牌、口令散量、绑定码和题库——公开仓库一旦被它们混进去就收不回来。
+/data-*.mv.db
+/data-*.lock.db
+*.log
+/tmp-*
+
+# 前端是独立仓库（quizgate-console），构建产物也是独立生成的：
+# 把 dist 烤进这个仓库就会有两份真，改过源码但忘了重跑的镜像会安静地服务旧页面。
+/web/
+/src/main/resources/static/
