@@ -23,6 +23,14 @@ HTTP POST + `Content-Type: application/x-protobuf`，请求体与响应体都是
 
 判分凭据是服务端的 `question_ask` 台账：没下发过的题一律不回判定结果，这个接口不是答案预言机。
 
+`next-question`、`answer`、`usage` 还要求设备已绑定孩子。未绑定时返回 400，孩子端使用本地题并保留
+用量队列等待绑定后重传，不能把用量确认后写到 `child_id=0`，也不能让未绑定设备共享判分账本。
+
+## 当前进展与待确认
+
+三端已完成项、尚未实现／验证的内容及待用户确认规则，统一记录在
+[项目进展与待确认](docs/项目进展与待确认.md)。游戏模式已明确暂停，未实现对局结束识别。
+
 ## 跑起来
 
 口令只走环境变量，仓库里没有默认口令；用户名留空就不建号。
@@ -38,6 +46,10 @@ export QUIZGATE_PARENT_USERNAME=...  QUIZGATE_PARENT_PASSWORD=...
 **家长没核对过的题，孩子永远抽不到**。图片字节只活在一个方法栈里，全程不落库。
 
 构建要走 `./mvnw.cmd`，protobuf-maven-plugin 要求 Maven ≥ 3.9.6，系统里老的 3.8.x 会在 generate 阶段直接失败。
+
+Windows 的 JVM 构建可用 `./mvnw.cmd test package`，产物为 `target/anti-addiction-0.0.1-SNAPSHOT.jar`，
+包含先前构建好的 `web/` 静态文件。Maven 分发下载慢时可设置环境变量
+`MVNW_REPOURL=https://maven.aliyun.com/repository/public`；依赖镜像用自己的 `settings.xml` 配置并通过 `-s` 传入。
 
 ## 原生镜像
 

@@ -89,7 +89,7 @@ public class GateService {
     }
 
     public NextQuestionReply nextQuestion(long deviceId, NextQuestionRequest request) {
-        var device = requireDevice(deviceId);
+        var device = requireBoundDevice(deviceId);
         long childId = device.childId();
         int grade = request.getGrade() > 0 ? request.getGrade() : gradeOf(childId);
         String knowledgePoint = request.getKnowledgePoint();
@@ -115,7 +115,7 @@ public class GateService {
     }
 
     public AnswerReply answer(long deviceId, AnswerRequest request) {
-        var device = requireDevice(deviceId);
+        var device = requireBoundDevice(deviceId);
         long childId = device.childId();
         long questionId = parseId(request.getQuestionId());
         var ask = usage.pendingAsk(childId, questionId);
@@ -138,7 +138,7 @@ public class GateService {
     }
 
     public UsageReportReply report(long deviceId, UsageReportRequest request) {
-        var device = requireDevice(deviceId);
+        var device = requireBoundDevice(deviceId);
         int accepted = 0;
         int duplicated = 0;
         for (UsageEvent event : request.getEventsList()) {
@@ -208,6 +208,16 @@ public class GateService {
 
     private Device requireDevice(long deviceId) {
         return accounts.device(deviceId).orElseThrow(() -> new ProtobufHttp.BadProtoRequest("设备令牌无效"));
+    }
+
+    private Device requireBoundDevice(long deviceId) {
+        var device = requireDevice(deviceId);
+        if (device.childId() == 0L) {
+            // 不能先确认用量再记到 child_id=0：客户端会删掉队列，绑定后永远追不回来。
+            // 取题/判分也必须有独立孩子归属，未绑定设备不能共用 child_id=0 的判分台账。
+            throw new ProtobufHttp.BadProtoRequest("设备尚未绑定孩子，请家长先输入绑定码；用量稍后重试");
+        }
+        return device;
     }
 
     private int gradeOf(long childId) {

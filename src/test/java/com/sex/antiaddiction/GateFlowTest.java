@@ -85,7 +85,7 @@ class GateFlowTest {
 
     private static final MediaType PROTOBUF = MediaType.parseMediaType("application/x-protobuf");
     private static final String TOKEN_HEADER = "X-Quizgate-Token";
-    /** 未绑定设备走 quizgate.default-grade，内置题库的样本也都出在这个年级。 */
+    /** 测试孩子与内置题库样本使用的年级。 */
     private static final int DEFAULT_GRADE = 2;
 
     @Autowired
@@ -110,7 +110,7 @@ class GateFlowTest {
 
     @Test
     void 取到的题不含正确答案_答错只给解析并换一道同知识点变式题() throws Exception {
-        String token = enroll("install-" + (++installSeq)).getDeviceToken();
+        String token = enrollBound();
         // 显式挑一个确实有变式题的知识点：否则随机抽到只剩一道题的知识点时，
         // 服务端走的是"原题重发"那条分支（下面另有测试专门钉它），这条测试就会随机红。
         String knowledgePoint = poolByKnowledgePoint().entrySet().stream()
@@ -144,7 +144,7 @@ class GateFlowTest {
      */
     @Test
     void 同知识点只剩一道题时原题重发_不许换成别的知识点() throws Exception {
-        String token = enroll("install-" + (++installSeq)).getDeviceToken();
+        String token = enrollBound();
         var singleEntry = poolByKnowledgePoint().entrySet().stream()
                 .filter(e -> e.getValue().size() == 1)
                 .sorted(Map.Entry.comparingByKey())
@@ -159,7 +159,7 @@ class GateFlowTest {
 
     @Test
     void 没有下发过的题一律不判分_四个下标全试也试不出答案() throws Exception {
-        String token = enroll("install-" + (++installSeq)).getDeviceToken();
+        String token = enrollBound();
         // 直接拿内置题号 1 去撞接口：它从没出现在这台设备的账上。
         for (int index = 0; index < 4; index++) {
             var reply = answer(token, "1", index);
@@ -185,7 +185,7 @@ class GateFlowTest {
 
     @Test
     void 用量上报按客户端事件号去重() throws Exception {
-        String token = enroll("install-" + (++installSeq)).getDeviceToken();
+        String token = enrollBound();
         var event = UsageEvent.newBuilder()
                 .setEventId("evt-" + installSeq)
                 .setOccurredAtMs(System.currentTimeMillis())
@@ -774,6 +774,34 @@ class GateFlowTest {
         return enrollWith(installId, "Tianyi-1", 29);
     }
 
+    private String enrollBound() throws Exception {
+        var home = newHousehold("答题");
+        var enrolled = enroll(freshInstall());
+        assertTrue(BindDeviceReply.parseFrom(bind(home.token(), home.childId(), enrolled.getBindCode())).getBound());
+        return enrolled.getDeviceToken();
+    }
+
+    @Test
+    void 未绑定时不共用判分账本且用量保留到绑定后重传() throws Exception {
+        var enrolled = enroll(freshInstall());
+        String token = enrolled.getDeviceToken();
+        var event = UsageEvent.newBuilder().setEventId("unbound-" + installSeq)
+                .setOccurredAtMs(System.currentTimeMillis()).setAppPackage("com.video.app").setPlayedMs(2000).build();
+        var body = UsageReportRequest.newBuilder().addEvents(event).build().toByteArray();
+        assertEquals(400, statusOf("/api/device/usage", token, body));
+        assertEquals(0, jdbc.queryForObject("select count(*) from usage_event where event_id = ?", Integer.class,
+                event.getEventId()));
+        assertEquals(400, statusOf("/api/device/next-question", token, NextQuestionRequest.getDefaultInstance().toByteArray()));
+        assertEquals(400, statusOf("/api/device/answer", token, AnswerRequest.newBuilder()
+                .setQuestionId("1").setSelectedIndex(0).build().toByteArray()));
+        var home = newHousehold("补报");
+        assertTrue(BindDeviceReply.parseFrom(bind(home.token(), home.childId(), enrolled.getBindCode())).getBound());
+        assertEquals(1, UsageReportReply.parseFrom(report(token, body)).getAccepted());
+        assertEquals(Long.parseLong(home.childId()), jdbc.queryForObject(
+                "select child_id from usage_event where event_id = ?", Long.class, event.getEventId()));
+        assertEquals(1, UsageReportReply.parseFrom(report(token, body)).getDuplicated());
+    }
+
     private String freshInstall() {
         return "install-" + (++installSeq);
     }
@@ -1122,8 +1150,8 @@ class GateFlowTest {
     }
 
     /**
-     * 未绑定设备的题池：走生产代码的同一条查询，测试里不抄 SQL。
-     * childId 用 0、grade 用配置里的默认年级，和 GateService 对未绑定设备的处理一致。
+     * 内置题池样本：走生产代码的同一条查询，测试里不抄 SQL。
+     * childId 用 0 排除家庭私有题，仅用于挑选测试知识点，不代表未绑定设备能取题。
      */
     private Map<String, List<Rows.Question>> poolByKnowledgePoint() {
         return questionStore.candidates(DEFAULT_GRADE, 0L, "", 0L).stream()
