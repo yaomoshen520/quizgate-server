@@ -324,6 +324,39 @@ message BindDeviceReply {
   string message = 3;
 }
 
+// 认领的反向动作。删档之前必须先把设备从这个名字下摘干净，所以家长要看得见"名下到底有几台、都是哪台"：
+// ChildSummary 里那个 device_model 只是"最近心跳的那一台"，拿它当删除前置条件会漏掉第二台。
+message ListChildDevicesRequest {
+  string child_id = 1;
+}
+
+message ChildDevice {
+  string device_id = 1;
+  string device_model = 2;
+  // 0 是"这台机器一次心跳都没打过"，不是一个时刻。界面必须按这个意思念。
+  int64 last_heartbeat_ms = 3;
+  // 失联是服务端反推的，口径和告警那一栏完全一致：只说明"多久没出现"，不说它被卸载了。
+  bool offline = 4;
+}
+
+message ListChildDevicesReply {
+  repeated ChildDevice devices = 1;
+}
+
+// 解绑会重新发一个绑定码：认领那一刻旧码已经被清空，不发新码这台机器就再也进不了任何人名下——
+// 那是死路，不是"解绑"。同时吊销这台设备的令牌，让它走真机验过的那条自愈路
+// （心跳 403 → 作废本地令牌 → 重新登记 → 屏幕上出现新码）。
+message UnbindDeviceRequest {
+  string device_id = 1;
+}
+
+message UnbindDeviceReply {
+  string device_model = 1;
+  // 摘掉这台之后这个孩子名下还剩几台：界面上"还要再解几台才能删"直接读这个数，不再自己数。
+  int32 remaining_devices = 2;
+  int64 server_time_ms = 3;
+}
+
 message GetRuleRequest {
   string child_id = 1;
 }
@@ -522,6 +555,35 @@ message CreateChildRequest {
 
 message CreateChildReply {
   ChildSummary child = 1;
+}
+
+// 改昵称和年级。字段和建档案那一条一一对应，只是多了 child_id：
+// 能新建能改的入口必须是同一份校验，否则"先建后改"就成了绕过年级上限的第二条路。
+message UpdateChildRequest {
+  string child_id = 1;
+  string display_name = 2;
+  int32 grade = 3;
+}
+
+message UpdateChildReply {
+  ChildSummary child = 1;
+}
+
+message DeleteChildRequest {
+  string child_id = 1;
+}
+
+// 删档不可撤销，所以服务端把每一类删掉多少条原样报回来，界面照着念。
+// 只回一句"删除成功"是不够的：家长按下去之前得知道自己清掉的是几台设备、几条用量。
+// removed_devices 在正常路径下恒为 0——名下还挂着设备时删除会被直接拒掉。它留在这里是因为
+// "查有没有设备"和"真删"之间有一次竞争：那一秒被人认领进来一台，兜底会连着它一起清，
+// 而那必须报得出来，不能悄悄吃掉。
+message DeleteChildReply {
+  bool deleted = 1;
+  int32 removed_devices = 2;
+  int32 removed_usage_events = 3;
+  int32 removed_gate_events = 4;
+  int32 removed_questions = 5;
 }
 
 // 管理员发注册码 / 查注册码台账。

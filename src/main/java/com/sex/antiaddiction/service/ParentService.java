@@ -5,10 +5,13 @@ import com.quizgate.proto.BindDeviceReply;
 import com.quizgate.proto.BindDeviceRequest;
 import com.quizgate.proto.ChangePasswordReply;
 import com.quizgate.proto.ChangePasswordRequest;
+import com.quizgate.proto.ChildDevice;
 import com.quizgate.proto.ChildSummary;
 import com.quizgate.proto.CreateChildReply;
 import com.quizgate.proto.CreateChildRequest;
 import com.quizgate.proto.DailyStat;
+import com.quizgate.proto.DeleteChildReply;
+import com.quizgate.proto.DeleteChildRequest;
 import com.quizgate.proto.GateAlertItem;
 import com.quizgate.proto.GetReportReply;
 import com.quizgate.proto.GetReportRequest;
@@ -18,6 +21,8 @@ import com.quizgate.proto.ListBankReply;
 import com.quizgate.proto.ListBankRequest;
 import com.quizgate.proto.ListChildrenReply;
 import com.quizgate.proto.ListChildrenRequest;
+import com.quizgate.proto.ListChildDevicesReply;
+import com.quizgate.proto.ListChildDevicesRequest;
 import com.quizgate.proto.ListAlertsReply;
 import com.quizgate.proto.OfflineChildItem;
 import com.quizgate.proto.LoginReply;
@@ -26,6 +31,10 @@ import com.quizgate.proto.RegisterReply;
 import com.quizgate.proto.RegisterRequest;
 import com.quizgate.proto.RuleSnapshot;
 import com.quizgate.proto.SaveRuleRequest;
+import com.quizgate.proto.UpdateChildReply;
+import com.quizgate.proto.UpdateChildRequest;
+import com.quizgate.proto.UnbindDeviceReply;
+import com.quizgate.proto.UnbindDeviceRequest;
 import com.quizgate.proto.UploadBankReply;
 import com.quizgate.proto.UploadBankRequest;
 import com.sex.antiaddiction.domain.Rows;
@@ -33,6 +42,7 @@ import com.sex.antiaddiction.domain.Rows.Child;
 import com.sex.antiaddiction.domain.Rows.Device;
 import com.sex.antiaddiction.infra.ProtobufHttp.BadProtoRequest;
 import com.sex.antiaddiction.repo.AccountStore;
+import com.sex.antiaddiction.repo.ChildDeletionStore;
 import com.sex.antiaddiction.repo.GateEventStore;
 import com.sex.antiaddiction.repo.QuestionStore;
 import com.sex.antiaddiction.repo.UsageStore;
@@ -80,12 +90,13 @@ public class ParentService {
     private final GateEventStore events;
     private final PasswordEncoder passwords;
     private final ChildScope scope;
+    private final ChildDeletionStore deletions;
     private final ZoneId zone;
     private final int defaultThresholdMinutes;
     private final long offlineAfterMs;
 
     public ParentService(AccountStore accounts, QuestionStore questions, UsageStore usage, GateService gates,
-            GateEventStore events, PasswordEncoder passwords, ChildScope scope,
+            GateEventStore events, PasswordEncoder passwords, ChildScope scope, ChildDeletionStore deletions,
             @Value("${quizgate.default-threshold-minutes:30}") int defaultThresholdMinutes,
             @Value("${quizgate.offline-after-ms:180000}") long offlineAfterMs) {
         this.accounts = accounts;
@@ -95,6 +106,7 @@ public class ParentService {
         this.events = events;
         this.passwords = passwords;
         this.scope = scope;
+        this.deletions = deletions;
         this.zone = ZoneId.systemDefault();
         this.defaultThresholdMinutes = defaultThresholdMinutes;
         this.offlineAfterMs = offlineAfterMs;
@@ -147,6 +159,43 @@ public class ParentService {
         accounts.attachChild(device.id(), child.id());
         return BindDeviceReply.newBuilder().setBound(true).setDeviceId(Long.toString(device.id()))
                 .setMessage("已绑定").build();
+    }
+
+    /**
+     * 这个名字下到底挂着几台设备。删除档案要的是这一整列：
+     * summary() 里那台只是"最近心跳的那一个"，拿它当删除的前置条件会漏掉第二台——
+     * 漏掉的那台会继续替这个孩子答题、继续拦着孩子，而家长以为自己已经全都关掉了。
+     */
+    public ListChildDevicesReply devices(Actor actor, ListChildDevicesRequest request) {
+        var child = requireChild(actor, request.getChildId());
+        var builder = ListChildDevicesReply.newBuilder();
+        for (var device : accounts.devicesOfChild(child.id())) {
+            builder.addDevices(ChildDevice.newBuilder()
+                    .setDeviceId(Long.toString(device.id()))
+                    .setDeviceModel(device.deviceModel())
+                    .setLastHeartbeatMs(device.lastHeartbeatMs())
+                    .setOffline(isOffline(device)));
+        }
+        return builder.build();
+    }
+
+    /**
+     * 解绑：把这台设备从这个孩子名下摘掉，同时当场重发一张绑定码、吊销这台机器的令牌。
+     * <p>
+     * 它不等于"关掉那台手机上的闸门"。摘掉之后那台机器和一台从没被认领过的机器完全一样：
+     * 退回服务端默认规则继续计时，用量因为没有归属而被拒收（本地队列留着，等下一次认领再追），
+     * 屏幕上出现新的六个字符——谁抄到都能把它认进自己家。这三件事都必须写在界面上，
+     * 不然"解绑"这个词会被家长理解成"那台手机已经不再被盯着了"。
+     */
+    public UnbindDeviceReply unbind(Actor actor, UnbindDeviceRequest request) {
+        var device = requireOwnedDevice(actor, request.getDeviceId());
+        accounts.detachDevice(device.id());
+        // device 是摘之前那一份快照，childId 还是原来的那个孩子：删完再数一遍名下剩几台。
+        return UnbindDeviceReply.newBuilder()
+                .setDeviceModel(device.deviceModel())
+                .setRemainingDevices(accounts.devicesOfChild(device.childId()).size())
+                .setServerTimeMs(System.currentTimeMillis())
+                .build();
     }
 
     public UploadBankReply upload(Actor actor, UploadBankRequest request) {
@@ -283,18 +332,72 @@ public class ParentService {
 
     /** 家长给自己添一个孩子。孩子一定挂在调用者名下，请求里没有 parent_id 可填。 */
     public CreateChildReply createChild(Actor actor, CreateChildRequest request) {
-        String name = request.getDisplayName().trim();
-        if (name.isEmpty() || name.length() > 64) {
-            throw new BadProtoRequest("孩子昵称要写成 1~64 个字符");
-        }
-        int grade = request.getGrade();
-        if (grade < 1 || grade > 9) {
-            throw new BadProtoRequest("年级只认 1~9");
-        }
+        String name = requireName(request.getDisplayName());
+        int grade = requireGrade(request.getGrade());
         long childId = accounts.createChildWithDefaultRule(actor.accountId(), name, grade, defaultThresholdMinutes);
         return CreateChildReply.newBuilder()
                 .setChild(summary(accounts.child(childId).orElseThrow(() -> new BadProtoRequest("建完孩子读不回来"))))
                 .build();
+    }
+
+    /**
+     * 改昵称和年级。校验必须和建档案走同一份：家长完全可以"删了再建"，
+     * 只要这两条路各写一份校验，宽松的那一条就是真正生效的那一条。
+     * <p>
+     * 年级只改档案自己那一列，已经入库的题目各带各的年级、一行都不动。
+     * 但抽题是按孩子当前的年级去题库里捞的，所以改完年级，屏幕上能抽到哪些题会立刻跟着变——
+     * 界面要把这一句说清，否则家长以为自己只是改了个标签。
+     */
+    public UpdateChildReply updateChild(Actor actor, UpdateChildRequest request) {
+        var child = requireChild(actor, request.getChildId());
+        String name = requireName(request.getDisplayName());
+        int grade = requireGrade(request.getGrade());
+        accounts.updateChild(child.id(), name, grade);
+        return UpdateChildReply.newBuilder()
+                .setChild(summary(accounts.child(child.id())
+                        .orElseThrow(() -> new BadProtoRequest("改完孩子读不回来"))))
+                .build();
+    }
+
+    /**
+     * 删档。不可撤销，连坐范围全部写在 ChildDeletionStore 那一处，这里只负责先问两句"这孩子归谁""名下还有没有设备"。
+     * 越界的 child_id 走的是 ChildScope 那句"child 不存在"——删除接口不能成为探测别人家 id 的工具。
+     */
+    @Transactional
+    public DeleteChildReply deleteChild(Actor actor, DeleteChildRequest request) {
+        var child = requireChild(actor, request.getChildId());
+        var bound = accounts.devicesOfChild(child.id());
+        if (!bound.isEmpty()) {
+            // 名下还挂着设备就不让删，而且要家长自己先去解绑。原因不是"数据不干净"：
+            // 档案删掉之后那台手机并不会停——设备行没了、令牌被吊销，app 下一次心跳 403 就带着
+            // 同一个 install_id 重新登记，建出一行新的、谁也不认识的机器，闸门照旧在孩子头上拦着。
+            // 让"删除档案"看起来等于"关掉那台手机"，是这套系统最不能撒的一个谎。
+            throw new BadProtoRequest("名下还绑着 " + bound.size()
+                    + " 台设备，先到孩子那一页下面的「认领孩子手机」把它们逐台解绑，再回来删除。");
+        }
+        var removed = deletions.remove(child.id());
+        return DeleteChildReply.newBuilder()
+                .setDeleted(true)
+                .setRemovedDevices(removed.devices())
+                .setRemovedUsageEvents(removed.usageEvents())
+                .setRemovedGateEvents(removed.gateEvents())
+                .setRemovedQuestions(removed.questions())
+                .build();
+    }
+
+    private static String requireName(String raw) {
+        String name = raw.trim();
+        if (name.isEmpty() || name.length() > 64) {
+            throw new BadProtoRequest("孩子昵称要写成 1~64 个字符");
+        }
+        return name;
+    }
+
+    private static int requireGrade(int grade) {
+        if (grade < 1 || grade > 9) {
+            throw new BadProtoRequest("年级只认 1~9");
+        }
+        return grade;
     }
 
     private static void requireUsablePassword(String password) {
@@ -386,6 +489,27 @@ public class ParentService {
     /** 归属判断只在 ChildScope 那一份里写；核对/删除那两个入口问的是同一句话。 */
     private Child requireChild(Actor actor, String childId) {
         return scope.require(actor, childId);
+    }
+
+    /**
+     * 设备没有"归哪个账号"这一列，它的归属只能从"挂在哪个孩子名下"反查一次，再走同一句 ChildScope。
+     * <p>
+     * 不存在、从没挂过、挂在别人家孩子名下——这三种情况回同一句话。分开回就等于把
+     * "这台 device_id 在不在库里、归谁"变成了一个可以逐个 id 问出来的探针。
+     */
+    private Device requireOwnedDevice(Actor actor, String rawDeviceId) {
+        long deviceId;
+        try {
+            deviceId = Long.parseLong(rawDeviceId.trim());
+        } catch (RuntimeException e) {
+            throw new BadProtoRequest("device_id 不是数字");
+        }
+        var device = accounts.device(deviceId).orElse(null);
+        if (device == null || device.childId() == 0L) {
+            throw new BadProtoRequest("device 不存在");
+        }
+        requireChild(actor, Long.toString(device.childId()));
+        return device;
     }
 
     private static int positive(int value, int fallback) {

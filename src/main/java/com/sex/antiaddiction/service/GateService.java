@@ -77,8 +77,10 @@ public class GateService {
         }
         var existing = accounts.deviceByInstallId(request.getInstallId());
         Device device = existing.orElseGet(() -> {
+            // 发码这件事交给仓储：解绑重发的那张码和这里第一次发的码必须走同一条"不撞车"规则，
+            // 两处各写一份随机源迟早有一处忘了查重复。
             long id = accounts.createDevice(request.getInstallId(), request.getDeviceModel(),
-                    request.getAndroidApiLevel(), ProtobufHttp.bindCode());
+                    request.getAndroidApiLevel());
             return accounts.device(id).orElseThrow();
         });
         String token = accounts.issueToken("device", device.id());

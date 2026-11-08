@@ -82,6 +82,14 @@ public class AccountStore {
     }
 
     /**
+     * 只改昵称和年级。parent_id 不在可改清单里：孩子档案的归属只能随账号走，
+     * 允许改它等于把别人家的孩子搬进自己名下。
+     */
+    public void updateChild(long childId, String displayName, int grade) {
+        jdbc.update("update child_profile set display_name = ?, grade = ? where id = ?", displayName, grade, childId);
+    }
+
+    /**
      * 建孩子必须连着落一份默认规则，启动种子和自助注册都走这一条路。
      * 闸门在家长第一次配置之前也得是有阈值的——"没有规则"在产品语义上等于"不设限"，那是 fail-open。
      * 两处各写一份默认值的话，改一处漏一处就是这种事故的形状。
@@ -102,9 +110,9 @@ public class AccountStore {
         return jdbc.query(SELECT_DEVICE + " where id = ?", AccountStore::toDevice, id).stream().findFirst();
     }
 
-    public long createDevice(String installId, String deviceModel, int androidApiLevel, String bindCode) {
+    public long createDevice(String installId, String deviceModel, int androidApiLevel) {
         return insertKey("insert into device (install_id, child_id, device_model, android_api_level, bind_code)"
-                + " values (?, null, ?, ?, ?)", installId, deviceModel, androidApiLevel, bindCode);
+                + " values (?, null, ?, ?, ?)", installId, deviceModel, androidApiLevel, uniqueBindCode());
     }
 
     /** 绑定码只有握着它的家长能认领，一次性，认领后清空。 */
@@ -115,6 +123,55 @@ public class AccountStore {
 
     public void attachChild(long deviceId, long childId) {
         jdbc.update("update device set child_id = ?, bind_code = null where id = ?", childId, deviceId);
+    }
+
+    /**
+     * 把设备从这个孩子名下摘掉，并且当场重新发一张绑定码。
+     * <p>
+     * 发新码不是贴心，是补洞：认领那一步把旧码清成了 null，而设备只有 enroll 那一次能拿到码，
+     * 之后再没人给它码，这台机器就既不在任何人名下、也再也进不了任何人名下。
+     * <p>
+     * 令牌一起吊销，走的是真机验过的那条自愈路（心跳 403 → 作废本地令牌 → 重新登记 → 屏幕上出现新码），
+     * 这样"解绑"不需要客户端配合一个新增字段才生效。
+     */
+    public void detachDevice(long deviceId) {
+        jdbc.update("update device set child_id = null, bind_code = ? where id = ?", uniqueBindCode(), deviceId);
+        // kind 条件不能省：subject_id 对设备令牌存 device.id，对家长令牌存账号 id，两个 id 空间是重叠的。
+        jdbc.update("delete from auth_token where kind = 'device' and subject_id = ?", deviceId);
+    }
+
+    /**
+     * 一个孩子的全部在绑设备，删除档案前要看的是这一整列而不是"最近心跳那台"。
+     * 顺序和 deviceOfChild 一致，界面上先出现的永远是还在跑的那台。
+     */
+    public List<Device> devicesOfChild(long childId) {
+        return jdbc.query(SELECT_DEVICE + " where child_id = ?"
+                + " order by coalesce(last_heartbeat_at, 0) desc, id desc", AccountStore::toDevice, childId);
+    }
+
+    /**
+     * 绑定码 32 个字符取 6 位，撞上的概率低到可以当作不存在——但"可以当作不存在"和"不存在"不是一件事：
+     * 一旦真的撞了，claimByBindCode 只会回第一行，第二台手机的屏幕上明明写着这六个字符却永远认不进来，
+     * 而家长看到的说法是"这台设备已经被别的账号认领"。发码的人查一次存在性就能把这种排查地狱关掉。
+     */
+    private String uniqueBindCode() {
+        for (int attempt = 0; attempt < 8; attempt++) {
+            String code = randomBindCode();
+            Integer taken = jdbc.queryForObject("select count(*) from device where bind_code = ?",
+                    Integer.class, code);
+            if (taken == null || taken == 0) {
+                return code;
+            }
+        }
+        throw new IllegalStateException("绑定码连续八次撞车，发码逻辑有问题");
+    }
+
+    private static String randomBindCode() {
+        var sb = new StringBuilder(6);
+        for (int i = 0; i < 6; i++) {
+            sb.append(CODE_ALPHABET[RANDOM.nextInt(CODE_ALPHABET.length)]);
+        }
+        return sb.toString();
     }
 
     public void heartbeat(long deviceId, long nowMs, boolean accessibilityConnected) {
@@ -208,8 +265,9 @@ public class AccountStore {
     }
 
     /**
-     * 发一个注册码。随机源用 SecureRandom，不是绑定码那套 ThreadLocalRandom：
-     * 绑定码错了最多重新绑一次，注册码是"谁能建号"那道闸，可预测就等于没有闸。
+     * 发一个注册码。注册码是"谁能建号"那道闸，可预测就等于没有闸，所以随机源用 SecureRandom。
+     * （绑定码现在也走同一个随机源：它不再是"错了重新绑一次就完事"的那一位——解绑会重发它，
+     * 一张能被猜到的绑定码就等于能抢在家长前面把别人的手机认进自己家。）
      */
     public String createInvite(long createdByAccountId) {
         var sb = new StringBuilder(8);

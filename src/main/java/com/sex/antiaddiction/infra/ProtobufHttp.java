@@ -2,7 +2,6 @@ package com.sex.antiaddiction.infra;
 
 import com.google.protobuf.MessageLite;
 import com.google.protobuf.Parser;
-import java.util.concurrent.ThreadLocalRandom;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
@@ -35,17 +34,6 @@ public final class ProtobufHttp {
         } catch (Exception e) {
             throw new BadProtoRequest("请求体不是合法的 protobuf: " + e.getMessage());
         }
-    }
-
-    /** 绑定码要给人念，去掉容易混淆的 0/O/1/I。 */
-    public static String bindCode() {
-        char[] alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".toCharArray();
-        var random = ThreadLocalRandom.current();
-        var sb = new StringBuilder(6);
-        for (int i = 0; i < 6; i++) {
-            sb.append(alphabet[random.nextInt(alphabet.length)]);
-        }
-        return sb.toString();
     }
 
     public static class BadProtoRequest extends RuntimeException {

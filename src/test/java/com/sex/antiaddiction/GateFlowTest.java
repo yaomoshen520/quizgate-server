@@ -11,6 +11,8 @@ import com.quizgate.proto.CreateChildReply;
 import com.quizgate.proto.CreateChildRequest;
 import com.quizgate.proto.CreateInviteReply;
 import com.quizgate.proto.CreateInviteRequest;
+import com.quizgate.proto.DeleteChildReply;
+import com.quizgate.proto.DeleteChildRequest;
 import com.quizgate.proto.EnrollReply;
 import com.quizgate.proto.EnrollRequest;
 import com.quizgate.proto.GateEvent;
@@ -30,6 +32,8 @@ import com.quizgate.proto.ListBankReply;
 import com.quizgate.proto.ListBankRequest;
 import com.quizgate.proto.ListChildrenReply;
 import com.quizgate.proto.ListChildrenRequest;
+import com.quizgate.proto.ListChildDevicesReply;
+import com.quizgate.proto.ListChildDevicesRequest;
 import com.quizgate.proto.ListInvitesReply;
 import com.quizgate.proto.ListInvitesRequest;
 import com.quizgate.proto.LoginRequest;
@@ -47,6 +51,10 @@ import com.quizgate.proto.Subject;
 import com.quizgate.proto.UsageEvent;
 import com.quizgate.proto.UsageReportReply;
 import com.quizgate.proto.UsageReportRequest;
+import com.quizgate.proto.UpdateChildReply;
+import com.quizgate.proto.UpdateChildRequest;
+import com.quizgate.proto.UnbindDeviceReply;
+import com.quizgate.proto.UnbindDeviceRequest;
 import com.quizgate.proto.UploadBankRequest;
 import com.quizgate.proto.UploadBankReply;
 import com.sex.antiaddiction.domain.Rows;
@@ -68,6 +76,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -768,7 +777,181 @@ class GateFlowTest {
                 .setDisplayName("超龄").setGrade(99).build().toByteArray()));
     }
 
+    /** 改档案走的是和建档同一份校验：只要两条路各写一份，宽松的那一条就是真正生效的那一条。 */
+    @Test
+    void 改孩子的昵称与年级_坏输入和别人家的孩子都改不动() throws Exception {
+        var home = newHousehold("改名");
+        var reply = UpdateChildReply.parseFrom(exchangePost("/api/parent/update-child", home.token(),
+                UpdateChildRequest.newBuilder().setChildId(home.childId())
+                        .setDisplayName("  改名后的孩子  ").setGrade(4).build().toByteArray()));
+        assertEquals("改名后的孩子", reply.getChild().getDisplayName(), "两头空格要去掉，和建档同一条规则");
+        assertEquals(4, reply.getChild().getGrade());
+        // 应答里回显说了不算：重新取一次列表，读的是库里那一行。
+        assertEquals("改名后的孩子", childRow(listChildrenBytes(home.token()), home.childId()).getDisplayName());
+
+        assertEquals(400, statusOf("/api/parent/update-child", home.token(), UpdateChildRequest.newBuilder()
+                .setChildId(home.childId()).setDisplayName("四年级就行").setGrade(0).build().toByteArray()));
+        assertEquals(400, statusOf("/api/parent/update-child", home.token(), UpdateChildRequest.newBuilder()
+                .setChildId(home.childId()).setDisplayName(" ").setGrade(3).build().toByteArray()));
+
+        // 越界必须"什么都没改"，只断 400 是不够的：先判归属再执行 UPDATE 和判完照样执行，
+        // 在前一条断言上长得一模一样。
+        var neighbour = newHousehold("邻家");
+        assertEquals(400, statusOf("/api/parent/update-child", neighbour.token(), UpdateChildRequest.newBuilder()
+                .setChildId(home.childId()).setDisplayName("被偷改的名字").setGrade(6).build().toByteArray()));
+        assertEquals("改名后的孩子", childRow(listChildrenBytes(home.token()), home.childId()).getDisplayName());
+    }
+
+    /**
+     * 删档的完整路径，三段都不许跳：名下有设备先被拒 → 解绑 → 再删 → 连坐范围逐表核对。
+     * <p>
+     * 前置闸不测，"删除档案"就替一台还在孩子头上拦着的手机宣布它自由了——档案没了那台机器并不会停，
+     * 它只会带着同一个 install_id 重新登记成一行谁也不认识的设备，闸门照旧。
+     * 解绑不测新码，那台机器摘掉归属之后再也发不出绑定码，永远进不了任何人名下。
+     * 连坐范围只能查表核对：接口回显永远读不到"漏删的那一张"。
+     */
+    @Test
+    void 删孩子要先解绑_解绑重发绑定码_删档把题库和账本一起带走() throws Exception {
+        var home = newHousehold("删档");
+        String install = freshInstall();
+        var enrolled = enroll(install);
+        var bound = BindDeviceReply.parseFrom(bind(home.token(), home.childId(), enrolled.getBindCode()));
+        assertTrue(bound.getBound());
+        long childId = Long.parseLong(home.childId());
+        long deviceId = Long.parseLong(bound.getDeviceId());
+        uploadWithAnswer(home.token(), home.childId(), "删档前的一道题 1+1", 0);
+        var usageBody = UsageReportRequest.newBuilder().addEvents(UsageEvent.newBuilder()
+                .setEventId("del-usage-" + install).setOccurredAtMs(System.currentTimeMillis())
+                .setAppPackage("com.video.app").setPlayedMs(3000).build()).build();
+        assertEquals(1, UsageReportReply.parseFrom(report(enrolled.getDeviceToken(), usageBody.toByteArray()))
+                .getAccepted());
+        GateEventReportReply.parseFrom(gateEvents(enrolled.getDeviceToken(),
+                gateEvent("del-gate-" + install, GateEventKind.ACCESSIBILITY_OFF,
+                        System.currentTimeMillis(), "删档之前的一条动手记录")));
+
+        assertEquals(1, count("select count(*) from usage_event where child_id = ?", childId));
+        assertEquals(1, count("select count(*) from gate_event where child_id = ?", childId));
+        assertEquals(1, count("select count(*) from question q join question_bank b on b.id = q.bank_id"
+                + " where b.scope_child_id = ?", childId));
+        assertTrue(count("select count(*) from auth_token where kind = 'device' and subject_id = ?", deviceId) >= 1,
+                "设备令牌没落库，后面那条「解绑就失效」的断言就是恒真的");
+
+        // ① 名下还挂着设备：删除必须被整句拒绝，一行都不许动。
+        assertEquals(400, statusOf("/api/parent/delete-child", home.token(),
+                DeleteChildRequest.newBuilder().setChildId(home.childId()).build().toByteArray()));
+        assertEquals(1, count("select count(*) from usage_event where child_id = ?", childId));
+        assertEquals(1, count("select count(*) from child_profile where id = ?", childId));
+
+        // ② 解绑：归属摘掉、令牌吊销、当场重发一张码。
+        var unbind = UnbindDeviceReply.parseFrom(unbind(home.token(), Long.toString(deviceId)));
+        assertEquals("Tianyi-1", unbind.getDeviceModel());
+        assertEquals(0, unbind.getRemainingDevices());
+        assertEquals(0, count("select count(*) from device where child_id = ?", childId));
+        assertEquals(0, count("select count(*) from auth_token where kind = 'device' and subject_id = ?", deviceId));
+        String reissued = jdbc.queryForObject("select bind_code from device where id = ?", String.class, deviceId);
+        assertNotNull(reissued, "解绑没发新码，这台机器就再也进不了任何人名下");
+        assertFalse(BindDeviceReply.parseFrom(bind(home.token(), home.childId(), enrolled.getBindCode())).getBound(),
+                "旧绑定码还认得动，说明换码只是写在注释里");
+
+        // 那台手机的真实走法：旧令牌进不来 → 重新登记 → 拿到的必须是刚重发的那一张 → 还能被认进新档案。
+        mvc.perform(post("/api/device/heartbeat").header(TOKEN_HEADER, enrolled.getDeviceToken())
+                        .contentType(PROTOBUF)
+                        .content(HeartbeatRequest.newBuilder().build().toByteArray()))
+                .andExpect(status().is4xxClientError());
+        assertEquals(reissued, enroll(install).getBindCode(), "重发的码没送到设备上，界面那句「下一步会拿到新码」就是空话");
+        var second = CreateChildReply.parseFrom(exchangePost("/api/parent/create-child", home.token(),
+                CreateChildRequest.newBuilder().setDisplayName("删档后的第二个孩子").setGrade(3).build().toByteArray()));
+        assertTrue(BindDeviceReply.parseFrom(
+                bind(home.token(), second.getChild().getChildId(), reissued)).getBound());
+
+        // ③ 现在才删得掉。设备此刻在第二个孩子名下，所以它必须活下来，而不是跟着第一个档案蒸发。
+        var reply = DeleteChildReply.parseFrom(exchangePost("/api/parent/delete-child", home.token(),
+                DeleteChildRequest.newBuilder().setChildId(home.childId()).build().toByteArray()));
+        assertTrue(reply.getDeleted());
+        assertEquals(0, reply.getRemovedDevices(), "解绑之后名下不该再有设备被连坐删掉");
+        assertEquals(1, reply.getRemovedUsageEvents());
+        assertEquals(1, reply.getRemovedGateEvents());
+        assertEquals(1, reply.getRemovedQuestions());
+        assertTrue(ListChildrenReply.parseFrom(listChildrenBytes(home.token())).getChildrenList().stream()
+                        .noneMatch(c -> c.getChildId().equals(home.childId())),
+                "档案删掉了，列表里就该没有它");
+
+        for (var table : List.of("usage_event", "gate_event", "question_ask", "rule", "game_rule",
+                "rule_watched_package", "game_classification")) {
+            assertEquals(0, count("select count(*) from " + table + " where child_id = ?", childId),
+                    table + " 里留下了读不到的孤行");
+        }
+        assertEquals(0, count("select count(*) from question_bank where scope_child_id = ?", childId));
+        assertEquals(0, count("select count(*) from child_profile where id = ?", childId));
+        assertEquals(1, count("select count(*) from device where id = ?", deviceId),
+                "已经解绑、现在属于别人的设备不能跟着这个档案一起消失");
+    }
+
+    /**
+     * 解绑的归属只能从"这台设备挂在哪个孩子名下"反查一次。
+     * 别人家的设备摘不动；自己的设备摘第二次和"这个 id 不存在"回同一句话，不能变成状态探针。
+     */
+    @Test
+    void 解绑不放开别人家的设备也不重复生效() throws Exception {
+        var home = newHousehold("在绑");
+        var enrolled = enroll(freshInstall());
+        String deviceId = BindDeviceReply.parseFrom(
+                bind(home.token(), home.childId(), enrolled.getBindCode())).getDeviceId();
+        var neighbour = newHousehold("伸手");
+        assertEquals(400, statusOf("/api/parent/unbind-device", neighbour.token(),
+                UnbindDeviceRequest.newBuilder().setDeviceId(deviceId).build().toByteArray()));
+        assertEquals(1, count("select count(*) from device where child_id = ?", Long.parseLong(home.childId())),
+                "越权解绑把别人家的设备摘走了");
+
+        assertEquals(200, statusOf("/api/parent/unbind-device", home.token(),
+                UnbindDeviceRequest.newBuilder().setDeviceId(deviceId).build().toByteArray()));
+        assertEquals(400, statusOf("/api/parent/unbind-device", home.token(),
+                UnbindDeviceRequest.newBuilder().setDeviceId(deviceId).build().toByteArray()));
+        assertEquals(400, statusOf("/api/parent/unbind-device", home.token(),
+                UnbindDeviceRequest.newBuilder().setDeviceId("不是数字").build().toByteArray()));
+    }
+
+    /**
+     * 删除的前置条件看的是"名下每一台"，所以这一列必须能被界面读出来。
+     * 用 ChildSummary 那台"最近心跳的"当条件是够不着第二台的：它会被留在原地继续拦孩子。
+     */
+    @Test
+    void 列设备给出名下每一台_没心跳过的不算失联_别人家的孩子读不到() throws Exception {
+        var home = newHousehold("列设备");
+        var first = enroll(freshInstall());
+        var secondDevice = enroll(freshInstall());
+        bind(home.token(), home.childId(), first.getBindCode());
+        bind(home.token(), home.childId(), secondDevice.getBindCode());
+
+        var listed = devices(home.token(), home.childId());
+        assertEquals(2, listed.getDevicesCount(), "一个孩子名下两台，界面只给一台的话前置条件就是假的");
+        for (var device : listed.getDevicesList()) {
+            assertEquals(0L, device.getLastHeartbeatMs());
+            assertFalse(device.getOffline(), "从没上报过不等于失联：前者是谁都没说过话，后者是说过话之后不说了");
+        }
+
+        var neighbour = newHousehold("伸手");
+        assertEquals(400, statusOf("/api/parent/list-devices", neighbour.token(),
+                ListChildDevicesRequest.newBuilder().setChildId(home.childId()).build().toByteArray()));
+        assertEquals(2, devices(home.token(), home.childId()).getDevicesCount());
+    }
+
+    /** 删除接口不能变成探测别人家 child_id 的工具：越界回 400，而且那个孩子还得好端端在库里。 */
+    @Test
+    void 家长删不掉别人家的孩子() throws Exception {
+        var home = newHousehold("被删");
+        var neighbour = newHousehold("伸手");
+        assertEquals(400, statusOf("/api/parent/delete-child", neighbour.token(),
+                DeleteChildRequest.newBuilder().setChildId(home.childId()).build().toByteArray()));
+        assertEquals("被删的孩子", childRow(listChildrenBytes(home.token()), home.childId()).getDisplayName());
+    }
+
     // ── 测试辅助 ──────────────────────────────────────────
+
+    /** 删档的连坐范围只能查表核对：接口回显永远读不到"漏删的那一张"。 */
+    private int count(String sql, Object... args) {
+        return jdbc.queryForObject(sql, Integer.class, args);
+    }
 
     private EnrollReply enroll(String installId) throws Exception {
         return enrollWith(installId, "Tianyi-1", 29);
@@ -933,6 +1116,16 @@ class GateFlowTest {
     private byte[] bind(String parentToken, String childId, String code) throws Exception {
         return exchangePost("/api/parent/bind-device", parentToken,
                 BindDeviceRequest.newBuilder().setChildId(childId).setBindCode(code).build().toByteArray());
+    }
+
+    private byte[] unbind(String parentToken, String deviceId) throws Exception {
+        return exchangePost("/api/parent/unbind-device", parentToken,
+                UnbindDeviceRequest.newBuilder().setDeviceId(deviceId).build().toByteArray());
+    }
+
+    private ListChildDevicesReply devices(String parentToken, String childId) throws Exception {
+        return ListChildDevicesReply.parseFrom(exchangePost("/api/parent/list-devices", parentToken,
+                ListChildDevicesRequest.newBuilder().setChildId(childId).build().toByteArray()));
     }
 
     private byte[] saveRule(String parentToken, String childId, int thresholdMinutes) throws Exception {

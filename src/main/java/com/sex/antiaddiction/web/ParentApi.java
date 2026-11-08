@@ -3,18 +3,22 @@ package com.sex.antiaddiction.web;
 import com.quizgate.proto.BindDeviceRequest;
 import com.quizgate.proto.ChangePasswordRequest;
 import com.quizgate.proto.CreateChildRequest;
+import com.quizgate.proto.DeleteChildRequest;
 import com.quizgate.proto.DeleteQuestionRequest;
 import com.quizgate.proto.GetReportRequest;
 import com.quizgate.proto.GetRuleRequest;
 import com.quizgate.proto.ListAlertsRequest;
 import com.quizgate.proto.ListBankRequest;
 import com.quizgate.proto.ListChildrenRequest;
+import com.quizgate.proto.ListChildDevicesRequest;
 import com.quizgate.proto.LoginRequest;
 import com.quizgate.proto.RegisterRequest;
 import com.quizgate.proto.SaveRuleRequest;
 import com.quizgate.proto.ScanBankRequest;
-import com.quizgate.proto.VerifyQuestionRequest;
+import com.quizgate.proto.UnbindDeviceRequest;
+import com.quizgate.proto.UpdateChildRequest;
 import com.quizgate.proto.UploadBankRequest;
+import com.quizgate.proto.VerifyQuestionRequest;
 import com.sex.antiaddiction.repo.AccountStore;
 import com.sex.antiaddiction.security.AppPrincipal;
 import com.sex.antiaddiction.service.ParentService;
@@ -71,6 +75,21 @@ public class ParentApi {
                 parse(body, CreateChildRequest.parser())));
     }
 
+    @PostMapping("/update-child")
+    public ResponseEntity<byte[]> updateChild(@AuthenticationPrincipal AppPrincipal principal,
+            @RequestBody(required = false) byte[] body) {
+        return reply(parents.updateChild(Actor.of(principal, accounts),
+                parse(body, UpdateChildRequest.parser())));
+    }
+
+    /** 删档和改名一样按 child_id 归属性判：越界编号在这里和"不存在"是同一句话。 */
+    @PostMapping("/delete-child")
+    public ResponseEntity<byte[]> deleteChild(@AuthenticationPrincipal AppPrincipal principal,
+            @RequestBody(required = false) byte[] body) {
+        return reply(parents.deleteChild(Actor.of(principal, accounts),
+                parse(body, DeleteChildRequest.parser())));
+    }
+
     /** 浏览器刷新后重取列表：令牌活在 sessionStorage，孩子列表不能只存在于登录那一次应答里。 */
     @PostMapping("/list-children")
     public ResponseEntity<byte[]> listChildren(@AuthenticationPrincipal AppPrincipal principal,
@@ -82,6 +101,22 @@ public class ParentApi {
     @PostMapping("/bind-device")
     public ResponseEntity<byte[]> bind(@AuthenticationPrincipal AppPrincipal principal, @RequestBody(required = false) byte[] body) {
         return reply(parents.bind(Actor.of(principal, accounts), parse(body, BindDeviceRequest.parser())));
+    }
+
+    /** 删除档案的前置条件读的就是这一列，所以它必须和 list-children 里"最近心跳那台"分开。 */
+    @PostMapping("/list-devices")
+    public ResponseEntity<byte[]> listDevices(@AuthenticationPrincipal AppPrincipal principal,
+            @RequestBody(required = false) byte[] body) {
+        return reply(parents.devices(Actor.of(principal, accounts),
+                parse(body, ListChildDevicesRequest.parser())));
+    }
+
+    /** 解绑是认领的反向动作，同样只按"这台设备现在挂在谁名下"判归属，请求里不带 child_id。 */
+    @PostMapping("/unbind-device")
+    public ResponseEntity<byte[]> unbindDevice(@AuthenticationPrincipal AppPrincipal principal,
+            @RequestBody(required = false) byte[] body) {
+        return reply(parents.unbind(Actor.of(principal, accounts),
+                parse(body, UnbindDeviceRequest.parser())));
     }
 
     /**
