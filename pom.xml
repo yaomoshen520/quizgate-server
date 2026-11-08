@@ -20,7 +20,22 @@
              （IDEA 日志：Target bytecode version 5 is not supported by SDK 25）。
              命令行 Maven + GraalVM 25 编 21 字节码没问题；IDEA 升到 2025.2+ 后可把这里改回 25。 -->
         <java.version>21</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 只托管版本，不引任何东西；Boot 4.1 对 Spring AI 2.0。 -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -41,6 +56,15 @@
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
             <scope>runtime</scope>
+        </dependency>
+
+        <!-- 识别与出题走 Spring AI 的 ChatModel，模型侧只认 OpenAI 兼容协议，
+             换供应商改配置不改代码。注意这条依赖的底层是官方 OpenAI Java SDK（Kotlin + OkHttp），
+             是本项目 native 面上唯一一处第三方反射风险，所以识别开关默认关死、
+             并且每次改它都要真跑一次 native-build 验收，不能只看编得过。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
         </dependency>
 
         <!-- lite 运行时：生成代码零反射，服务端 native 与安卓 APK 都吃这一个。

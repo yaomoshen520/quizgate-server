@@ -2,6 +2,27 @@ spring:
   application:
     name: anti-addiction
 
+  # 识别与出题的模型侧。DeepSeek 走 OpenAI 兼容协议，所以只用 spring-ai 的 openai 那一路客户端；
+  # 换别家（含自建）改 base-url + model 即可，代码里没有一个供应商专有字段。
+  ai:
+    openai:
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      # 占位值不是口令：spring-ai 的连接属性要求这一项非空，服务在"没配口令"时也必须能正常起来
+      # （识别开关默认关死，这个占位串永远出不了网）。真口令只从环境变量进来。
+      api-key: ${DEEPSEEK_API_KEY:not-configured}
+      # 只用得上 chat，其余五个自动配置各建一个用不到的 bean，还各自要求口令，一律关掉。
+      embedding:
+        enabled: false
+      image:
+        enabled: false
+      audio:
+        speech:
+          enabled: false
+        transcription:
+          enabled: false
+      moderation:
+        enabled: false
+
   # 文件模式 H2：进程重启数据还在，native 编译也不依赖外部数据库服务。
   datasource:
     url: jdbc:h2:file:./data/quizgate;AUTO_SERVER=TRUE
@@ -33,13 +54,14 @@ quizgate:
   # 家长真要用识别时再 enabled=true，口令只走环境变量。
   extractor:
     enabled: ${QUIZGATE_EXTRACTOR_ENABLED:false}
-    # 阿里云正在把 dashscope.aliyuncs.com 迁到 {WorkspaceId}.{region}.maas.aliyuncs.com，
-    # 端点整体可覆盖，撞上新形状时改环境变量即可。
-    endpoint: ${QUIZGATE_EXTRACTOR_ENDPOINT:https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation}
-    api-key: ${DASHSCOPE_API_KEY:}
-    model: ${QUIZGATE_EXTRACTOR_MODEL:qwen-vl-max-latest}
+    # 识图只有 flash 这一档能吃图，v4-pro 是纯文本模型，所以默认钉死 flash。
+    model: ${QUIZGATE_EXTRACTOR_MODEL:deepseek-flash}
+    api-key: ${DEEPSEEK_API_KEY:}
     # 一次识别最多收几道题：既是给模型的约束，也是硬截断。
     max-drafts: 20
     # 家长端传之前已经压到长边 1600 的 JPEG，正常几百 KB；这一条只挡没压的原图。
     max-image-bytes: 4194304
     timeout-ms: 30000
+    # flash 是推理模型：预算里大半会被思考过程吃掉。给小了 content 会返回空串，
+    # 表面看就是"识别引擎没回任何文字"。20 道题的 JSON 留 4000 个 token 是实测够用的量。
+    max-tokens: ${QUIZGATE_EXTRACTOR_MAX_TOKENS:4000}
