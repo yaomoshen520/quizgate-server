@@ -28,9 +28,11 @@ import static com.sex.antiaddiction.infra.ProtobufHttp.reply;
 public class DeviceApi {
 
     private final GateService gate;
+    private final com.sex.antiaddiction.repo.GameStore games;
 
-    public DeviceApi(GateService gate) {
+    public DeviceApi(GateService gate, com.sex.antiaddiction.repo.GameStore games) {
         this.gate = gate;
+        this.games = games;
     }
 
     @PostMapping("/enroll")
@@ -57,7 +59,9 @@ public class DeviceApi {
     @PostMapping("/heartbeat")
     public ResponseEntity<byte[]> heartbeat(@AuthenticationPrincipal AppPrincipal principal,
             @RequestBody(required = false) byte[] body) {
-        return reply(gate.heartbeat(principal.subjectId(), parse(body, HeartbeatRequest.parser())));
+        var request = parse(body, HeartbeatRequest.parser());
+        games.observe(principal.subjectId(), request);
+        return reply(gate.heartbeat(principal.subjectId(), request));
     }
 
     /**

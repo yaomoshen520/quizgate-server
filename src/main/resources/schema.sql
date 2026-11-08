@@ -139,3 +139,39 @@ create table if not exists invite_code (
 create index if not exists idx_question_lookup on question (grade, knowledge_point);
 create index if not exists idx_usage_child on usage_event (child_id, occurred_at_ms);
 create index if not exists idx_gate_event_child on gate_event (child_id, occurred_at_ms);
+-- Game mode starts disabled until a parent configures its durations.
+create table if not exists game_rule (
+ child_id bigint primary key, enabled boolean not null, warning_seconds int not null,
+ extension_minutes int not null, max_extensions int not null
+);
+create table if not exists device_app_snapshot (
+ device_id bigint primary key, consent boolean not null, coverage varchar(64) not null, synced_at_ms bigint not null
+);
+create table if not exists device_app (
+ device_id bigint not null, package_name varchar(128) not null, label varchar(160) not null,
+ system_game boolean not null, primary key(device_id,package_name)
+);
+create table if not exists game_classification (
+ child_id bigint not null, package_name varchar(128) not null, classification int not null,
+ primary key(child_id,package_name)
+);
+alter table device add column if not exists foreground_package varchar(128) default '';
+alter table device add column if not exists observed_at_ms bigint default 0;
+alter table device add column if not exists applied_rule_version bigint default 0;
+alter table device add column if not exists extensions_used int default 0;
+alter table device add column if not exists game_state varchar(64) default '';
+alter table device add column if not exists game_cycle_id varchar(36) default '';
+-- Keep the active and most recently issued policies so mid-round edits do not change approval duration.
+create table if not exists issued_game_policy (
+ device_id bigint not null, rule_version bigint not null, child_id bigint not null,
+ enabled boolean not null, extension_minutes int not null, max_extensions int not null,
+ game_packages varchar(1048576) not null, primary key(device_id,rule_version)
+);
+create table if not exists game_extension_request (
+ request_id varchar(36) primary key, device_id bigint not null, child_id bigint not null,
+ cycle_id varchar(36) not null, package_name varchar(128) not null, extension_minutes int not null,
+ rule_version bigint not null, state int not null, requested_at_ms bigint not null,
+ decided_at_ms bigint not null default 0, decided_by bigint,
+ unique(device_id,cycle_id)
+);
+create index if not exists idx_game_extension_child on game_extension_request(child_id,requested_at_ms);

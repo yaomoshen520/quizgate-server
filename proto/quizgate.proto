@@ -34,6 +34,81 @@ message RuleSnapshot {
   repeated string watched_packages = 4;
   bool enabled = 5;
   int64 version = 6;
+  GameModeRule game_mode = 7;
+}
+
+message GameModeRule {
+  bool enabled = 1;
+  int32 warning_seconds = 2;
+  int32 extension_minutes = 3;
+  int32 max_extensions = 4;
+  repeated string game_packages = 5;
+}
+
+enum GameExtensionState {
+  GAME_EXTENSION_UNSPECIFIED = 0;
+  GAME_EXTENSION_PENDING = 1;
+  GAME_EXTENSION_APPROVED = 2;
+  GAME_EXTENSION_REJECTED = 3;
+  GAME_EXTENSION_APPLIED = 4;
+  GAME_EXTENSION_CLOSED = 5;
+}
+message GameExtension {
+  string request_id = 1;
+  string device_id = 2;
+  string cycle_id = 3;
+  string package_name = 4;
+  int32 extension_minutes = 5;
+  GameExtensionState state = 6;
+  int64 requested_at_ms = 7;
+  int64 decided_at_ms = 8;
+  int64 rule_version = 9;
+  string device_model = 10;
+}
+message ApplyGameExtensionRequest { string cycle_id = 1; string package_name = 2; }
+message GameExtensionStatusRequest {
+  string cycle_id = 1;
+  string applied_request_id = 2;
+  bool cancel = 3;
+}
+message ListGameExtensionsRequest { string child_id = 1; }
+message ListGameExtensionsReply { repeated GameExtension requests = 1; }
+message DecideGameExtensionRequest { string request_id = 1; bool approve = 2; }
+
+message InstalledApp {
+  string package_name = 1;
+  string label = 2;
+  bool system_game = 3;
+  // 0=自动，1=游戏并监管，2=非游戏。
+  int32 classification = 4;
+  bool is_game = 5;
+}
+
+message AppInventoryRequest {
+  bool consent = 1;
+  repeated InstalledApp apps = 2;
+  string coverage = 3;
+}
+message AppInventoryReply { int64 synced_at_ms = 1; }
+message ListAppsRequest { string child_id = 1; }
+message DeviceApps {
+  string device_id = 1;
+  string device_model = 2;
+  bool consent = 3;
+  string coverage = 4;
+  int64 synced_at_ms = 5;
+  repeated InstalledApp apps = 6;
+  string foreground_package = 7;
+  int64 observed_at_ms = 8;
+  int64 applied_rule_version = 9;
+  int32 extensions_used = 10;
+  string game_state = 11;
+}
+message ListAppsReply { repeated DeviceApps devices = 1; }
+message ClassifyAppRequest {
+  string child_id = 1;
+  string package_name = 2;
+  int32 classification = 3;
 }
 
 // ── 设备侧（app A）──────────────────────────────────────
@@ -102,6 +177,11 @@ message HeartbeatRequest {
   int64 accumulated_ms = 2;
   // 客户端已知的规则版本，服务端据此决定要不要回传完整快照。
   int64 known_rule_version = 3;
+  string foreground_package = 4;
+  int64 applied_rule_version = 5;
+  int32 extensions_used = 6;
+  string game_state = 7;
+  string game_cycle_id = 8;
 }
 
 message HeartbeatReply {
@@ -127,6 +207,10 @@ enum GateEventKind {
   NOTIFICATIONS_OFF = 5;
   NOTIFICATIONS_RESTORED = 6;
   GATE_INTERRUPTED = 7;
+  GAME_WARNING = 8;
+  GAME_EXTENDED = 9;
+  GAME_FORCED = 10;
+  GAME_WARNING_FAILED = 11;
 }
 
 // event_id 由客户端生成，服务端按它去重——断网期间攒下的那几条会反复重传，

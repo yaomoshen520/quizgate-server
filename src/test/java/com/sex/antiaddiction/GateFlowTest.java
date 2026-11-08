@@ -1163,6 +1163,149 @@ class GateFlowTest {
                 Long.parseLong(questionId));
     }
 
+
+    @Test
+    void gameInventoryAndClassificationAreBoundToHousehold() throws Exception {
+        var home=newHousehold("游戏清单");
+        var other=newHousehold("另一个家庭");
+        var device=enrollWith(freshInstall(),"Game test",30);
+        assertTrue(BindDeviceReply.parseFrom(bind(home.token(),home.childId(),device.getBindCode())).getBound());
+        var inventory=com.quizgate.proto.AppInventoryRequest.newBuilder().setConsent(true).setCoverage("test")
+            .addApps(com.quizgate.proto.InstalledApp.newBuilder().setPackageName("com.tencent.tmgp.sgame").setLabel("王者荣耀"))
+            .addApps(com.quizgate.proto.InstalledApp.newBuilder().setPackageName("example.custom.game").setLabel("自定义游戏"))
+            .addApps(com.quizgate.proto.InstalledApp.newBuilder().setPackageName("android").setLabel("Android 系统")).build();
+        exchangePost("/api/device/app-inventory",device.getDeviceToken(),inventory.toByteArray());
+        var query=com.quizgate.proto.ListAppsRequest.newBuilder().setChildId(home.childId()).build();
+        var listed=com.quizgate.proto.ListAppsReply.parseFrom(exchangePost("/api/parent/list-apps",home.token(),query.toByteArray()));
+        assertEquals(3,listed.getDevices(0).getAppsCount());
+        assertTrue(listed.getDevices(0).getAppsList().stream().filter(a->a.getPackageName().contains("sgame")).findFirst().orElseThrow().getIsGame());
+        mvc.perform(post("/api/parent/list-apps").header(TOKEN_HEADER,other.token()).contentType(PROTOBUF).content(query.toByteArray())).andExpect(status().isBadRequest());
+        exchangePost("/api/parent/classify-app",home.token(),com.quizgate.proto.ClassifyAppRequest.newBuilder()
+            .setChildId(home.childId()).setPackageName("example.custom.game").setClassification(1).build().toByteArray());
+        exchangePost("/api/device/app-inventory",device.getDeviceToken(),inventory.toByteArray());
+        var fetched=GetRuleReply.parseFrom(exchangePost("/api/parent/get-rule",home.token(),GetRuleRequest.newBuilder().setChildId(home.childId()).build().toByteArray())).getRule();
+        assertTrue(fetched.getGameMode().getGamePackagesList().contains("example.custom.game"));
+        assertTrue(fetched.getGameMode().getGamePackagesList().contains("com.tencent.tmgp.sgame"));
+        var unbound=enrollWith(freshInstall(),"Unbound",30);
+        mvc.perform(post("/api/device/app-inventory").header(TOKEN_HEADER,unbound.getDeviceToken()).contentType(PROTOBUF).content(inventory.toByteArray())).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void gameRuleRejectsMoreThanFifteenMinutesOrTwoExtensions() throws Exception {
+        var home=newHousehold("游戏规则");
+        var game=com.quizgate.proto.GameModeRule.newBuilder().setEnabled(true).setWarningSeconds(60).setExtensionMinutes(15).setMaxExtensions(2).build();
+        var rule=RuleSnapshot.newBuilder().setEnabled(true).setThresholdMinutes(30).setGameMode(game).build();
+        var request=SaveRuleRequest.newBuilder().setChildId(home.childId()).setRule(rule).build();
+        var saved=RuleSnapshot.parseFrom(exchangePost("/api/parent/save-rule",home.token(),request.toByteArray()));
+        assertEquals(15,saved.getGameMode().getExtensionMinutes());assertEquals(2,saved.getGameMode().getMaxExtensions());
+        for(var invalid:List.of(game.toBuilder().setExtensionMinutes(16).build(),game.toBuilder().setMaxExtensions(3).build(),game.toBuilder().setWarningSeconds(0).build())) {
+            mvc.perform(post("/api/parent/save-rule").header(TOKEN_HEADER,home.token()).contentType(PROTOBUF)
+                .content(request.toBuilder().setRule(rule.toBuilder().setGameMode(invalid)).build().toByteArray())).andExpect(status().isBadRequest());
+        }
+        // An older parent client omitting the new message must not erase an existing game rule.
+        var oldClient=RuleSnapshot.parseFrom(exchangePost("/api/parent/save-rule",home.token(),request.toBuilder().setRule(rule.toBuilder().clearGameMode()).build().toByteArray()));
+        assertEquals(game,oldClient.getGameMode());
+    }
+
+    private record ApprovalFixture(String parent, String child, String token, long version, String cycle) {}
+    private ApprovalFixture approvalFixture() throws Exception {
+        var home=newHousehold("额外延期");
+        var device=enrollWith(freshInstall(),"Approval phone",30);
+        bind(home.token(),home.childId(),device.getBindCode());
+        exchangePost("/api/device/app-inventory",device.getDeviceToken(),com.quizgate.proto.AppInventoryRequest.newBuilder()
+            .setConsent(true).addApps(com.quizgate.proto.InstalledApp.newBuilder().setPackageName("com.tencent.tmgp.sgame").setLabel("王者荣耀")).build().toByteArray());
+        var game=com.quizgate.proto.GameModeRule.newBuilder().setEnabled(true).setWarningSeconds(20).setExtensionMinutes(1).setMaxExtensions(2);
+        var rule=RuleSnapshot.newBuilder().setEnabled(true).setThresholdMinutes(1).setGameMode(game);
+        var saved=RuleSnapshot.parseFrom(exchangePost("/api/parent/save-rule",home.token(),SaveRuleRequest.newBuilder().setChildId(home.childId()).setRule(rule).build().toByteArray()));
+        heartbeat(device.getDeviceToken(),0);
+        var fixture=new ApprovalFixture(home.token(),home.childId(),device.getDeviceToken(),saved.getVersion(),java.util.UUID.randomUUID().toString());
+        approvalHeartbeat(fixture,2,fixture.version(),fixture.version(),fixture.cycle());
+        return fixture;
+    }
+    private void approvalHeartbeat(ApprovalFixture f,int used,long applied,long known,String cycle) throws Exception {
+        exchangePost("/api/device/heartbeat",f.token(),HeartbeatRequest.newBuilder().setAccessibilityConnected(true)
+            .setKnownRuleVersion(known).setAppliedRuleVersion(applied).setExtensionsUsed(used).setGameCycleId(cycle)
+            .setForegroundPackage("com.tencent.tmgp.sgame").build().toByteArray());
+    }
+    private com.quizgate.proto.GameExtension applyExtra(ApprovalFixture f) throws Exception {
+        return com.quizgate.proto.GameExtension.parseFrom(exchangePost("/api/device/game-extension",f.token(),
+            com.quizgate.proto.ApplyGameExtensionRequest.newBuilder().setCycleId(f.cycle()).setPackageName("com.tencent.tmgp.sgame").build().toByteArray()));
+    }
+    private com.quizgate.proto.GameExtension decideExtra(ApprovalFixture f,String id,boolean approve) throws Exception {
+        return com.quizgate.proto.GameExtension.parseFrom(exchangePost("/api/parent/decide-game-extension",f.parent(),
+            com.quizgate.proto.DecideGameExtensionRequest.newBuilder().setRequestId(id).setApprove(approve).build().toByteArray()));
+    }
+    @Test void extraApplicationIsScopedAndRetriesReuseOneRequest() throws Exception {
+        var f=approvalFixture();
+        var body=com.quizgate.proto.ApplyGameExtensionRequest.newBuilder().setCycleId(f.cycle()).setPackageName("com.tencent.tmgp.sgame").build().toByteArray();
+        approvalHeartbeat(f,1,f.version(),f.version(),f.cycle());
+        mvc.perform(post("/api/device/game-extension").header(TOKEN_HEADER,f.token()).contentType(PROTOBUF).content(body)).andExpect(status().isBadRequest());
+        approvalHeartbeat(f,2,f.version(),f.version(),f.cycle());
+        var first=applyExtra(f); var retry=applyExtra(f);
+        assertEquals(first.getRequestId(),retry.getRequestId());
+        assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_PENDING,first.getState());
+        var other=newHousehold("别家审批");
+        var decide=com.quizgate.proto.DecideGameExtensionRequest.newBuilder().setRequestId(first.getRequestId()).setApprove(true).build().toByteArray();
+        mvc.perform(post("/api/parent/decide-game-extension").header(TOKEN_HEADER,other.token()).contentType(PROTOBUF).content(decide)).andExpect(status().isBadRequest());
+        mvc.perform(post("/api/parent/list-game-extensions").header(TOKEN_HEADER,other.token()).contentType(PROTOBUF)
+            .content(com.quizgate.proto.ListGameExtensionsRequest.newBuilder().setChildId(f.child()).build().toByteArray())).andExpect(status().isBadRequest());
+        mvc.perform(post("/api/device/game-extension").contentType(PROTOBUF).content(body)).andExpect(status().isForbidden());
+        var unbound=enrollWith(freshInstall(),"Unbound approval",30);
+        mvc.perform(post("/api/device/game-extension").header(TOKEN_HEADER,unbound.getDeviceToken()).contentType(PROTOBUF).content(body)).andExpect(status().isBadRequest());
+    }
+    @Test void approvalAndDeviceAcknowledgementAreIdempotent() throws Exception {
+        var f=approvalFixture(); var first=applyExtra(f);
+        assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_APPROVED,decideExtra(f,first.getRequestId(),true).getState());
+        assertEquals(1,decideExtra(f,first.getRequestId(),true).getExtensionMinutes());
+        var ack=com.quizgate.proto.GameExtensionStatusRequest.newBuilder().setCycleId(f.cycle()).setAppliedRequestId(first.getRequestId()).build();
+        for(int i=0;i<2;i++) {
+            var reply=com.quizgate.proto.GameExtension.parseFrom(exchangePost("/api/device/game-extension-status",f.token(),ack.toByteArray()));
+            assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_APPLIED,reply.getState());
+        }
+        assertEquals(first.getRequestId(),applyExtra(f).getRequestId());
+        assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_APPLIED,decideExtra(f,first.getRequestId(),true).getState());
+        mvc.perform(post("/api/parent/decide-game-extension").header(TOKEN_HEADER,f.parent()).contentType(PROTOBUF)
+            .content(com.quizgate.proto.DecideGameExtensionRequest.newBuilder().setRequestId(first.getRequestId()).setApprove(false).build().toByteArray())).andExpect(status().isBadRequest());
+    }
+    @Test void rejectedRequestCannotReapplyAndOldRoundCannotBeApproved() throws Exception {
+        var rejected=approvalFixture();var one=applyExtra(rejected);
+        assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_REJECTED,decideExtra(rejected,one.getRequestId(),false).getState());
+        assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_REJECTED,applyExtra(rejected).getState());
+        var ended=approvalFixture();var pending=applyExtra(ended);
+        approvalHeartbeat(ended,0,0,ended.version(),"");
+        assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_CLOSED,decideExtra(ended,pending.getRequestId(),true).getState());
+        var statusRequest=com.quizgate.proto.GameExtensionStatusRequest.newBuilder().setCycleId(ended.cycle()).build();
+        assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_CLOSED,com.quizgate.proto.GameExtension.parseFrom(
+            exchangePost("/api/device/game-extension-status",ended.token(),statusRequest.toByteArray())).getState());
+    }
+    @Test void aGrantCannotFollowDeviceToAnotherChild() throws Exception {
+        var f=approvalFixture();var request=applyExtra(f);
+        decideExtra(f,request.getRequestId(),true);
+        var other=newHousehold("另一孩子");
+        jdbc.update("update device set child_id=? where id=?",Long.parseLong(other.childId()),Long.parseLong(request.getDeviceId()));
+        var result=com.quizgate.proto.GameExtension.parseFrom(exchangePost("/api/device/game-extension-status",f.token(),
+            com.quizgate.proto.GameExtensionStatusRequest.newBuilder().setCycleId(f.cycle()).build().toByteArray()));
+        assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_CLOSED,result.getState());
+        assertEquals(com.quizgate.proto.GameExtensionState.GAME_EXTENSION_CLOSED,applyExtra(f).getState());
+    }
+    @Test void approvalUsesFrozenIssuedDurationAfterParentEditsRule() throws Exception {
+        var f=approvalFixture();
+        for(int i=0;i<5;i++) {
+            var game=com.quizgate.proto.GameModeRule.newBuilder().setEnabled(true).setWarningSeconds(20).setExtensionMinutes(15).setMaxExtensions(1);
+            var saved=RuleSnapshot.parseFrom(exchangePost("/api/parent/save-rule",f.parent(),SaveRuleRequest.newBuilder().setChildId(f.child())
+                .setRule(RuleSnapshot.newBuilder().setEnabled(true).setThresholdMinutes(1).setGameMode(game)).build().toByteArray()));
+            approvalHeartbeat(f,2,f.version(),0,f.cycle());
+            assertTrue(saved.getVersion()>f.version());
+        }
+        var request=applyExtra(f);
+        assertEquals(1,request.getExtensionMinutes());
+        assertEquals(f.version(),request.getRuleVersion());
+        assertEquals(1,decideExtra(f,request.getRequestId(),true).getExtensionMinutes());
+        var latest=com.quizgate.proto.ListGameExtensionsReply.parseFrom(exchangePost("/api/parent/list-game-extensions",f.parent(),
+            com.quizgate.proto.ListGameExtensionsRequest.newBuilder().setChildId(f.child()).build().toByteArray()));
+        assertEquals(1,latest.getRequestsCount());
+    }
+
     private byte[] exchangePost(String path, String token, byte[] body) throws Exception {
         var request = post(path).contentType(PROTOBUF).content(body);
         if (token != null) {

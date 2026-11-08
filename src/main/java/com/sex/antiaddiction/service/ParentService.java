@@ -169,19 +169,27 @@ public class ParentService {
         return acceptedBuilder.setAccepted(accepted).build();
     }
 
+    @Transactional
     public RuleSnapshot saveRule(Actor actor, SaveRuleRequest request) {
         var child = requireChild(actor, request.getChildId());
         var incoming = request.getRule();
+        var game = incoming.hasGameMode() ? incoming.getGameMode() : gates.ruleOf(child.id()).gameMode();
+        if (game.getMaxExtensions() < 0 || game.getMaxExtensions() > 2
+                || game.getExtensionMinutes() < 0 || game.getExtensionMinutes() > 15 || game.getWarningSeconds() < 0
+                || (game.getEnabled() && (game.getExtensionMinutes() < 1 || game.getWarningSeconds() < 1
+                    || game.getWarningSeconds() > positive(incoming.getThresholdMinutes(), defaultThresholdMinutes) * 60))) {
+            throw new BadProtoRequest("游戏模式须设置提醒时长，单次延期 1—15 分钟，最多延期 0—2 次");
+        }
         // 版本用服务端时钟，家长端和闸门端都靠它判断"规则变了没有"。
         var rule = new Rows.Rule(child.id(),
                 positive(incoming.getThresholdMinutes(), defaultThresholdMinutes),
                 positive(incoming.getDailyLimitMinutes(), 120),
                 Math.max(0, incoming.getGraceMinutes()),
                 incoming.getEnabled(),
-                System.currentTimeMillis(),
-                incoming.getWatchedPackagesList());
+                Math.max(System.currentTimeMillis(), gates.ruleOf(child.id()).version() + 1),
+                incoming.getWatchedPackagesList(), game.toBuilder().clearGamePackages().build());
         accounts.saveRule(rule);
-        return GateService.ruleProto(rule);
+        return GateService.ruleProto(accounts.rule(child.id()).orElseThrow());
     }
 
     /**

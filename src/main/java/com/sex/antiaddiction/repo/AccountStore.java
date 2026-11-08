@@ -147,14 +147,40 @@ public class AccountStore {
                 String.class, childId);
         var first = head.get(0);
         return Optional.of(new Rule(first.childId(), first.thresholdMinutes(), first.dailyLimitMinutes(),
-                first.graceMinutes(), first.enabled(), first.version(), packages));
+                first.graceMinutes(), first.enabled(), first.version(), packages, gameRule(childId)));
     }
 
+    public void bumpRuleVersion(long childId) {
+        jdbc.update("update rule set version=greatest(version+1, ?) where child_id=?", System.currentTimeMillis(), childId);
+    }
+
+    private com.quizgate.proto.GameModeRule gameRule(long childId) {
+        var config = jdbc.query("select * from game_rule where child_id=?", (rs,n) ->
+            com.quizgate.proto.GameModeRule.newBuilder().setEnabled(rs.getBoolean("enabled"))
+                .setWarningSeconds(rs.getInt("warning_seconds")).setExtensionMinutes(rs.getInt("extension_minutes"))
+                .setMaxExtensions(rs.getInt("max_extensions")).build(), childId).stream().findFirst()
+                .orElse(com.quizgate.proto.GameModeRule.newBuilder().setMaxExtensions(2).build());
+        var packages = new java.util.TreeSet<String>();
+        jdbc.query("select a.package_name,a.system_game,coalesce(o.classification,0) as classification"
+            + " from device_app a join device d on d.id=a.device_id join device_app_snapshot s on s.device_id=d.id"
+            + " left join game_classification o on o.child_id=d.child_id and o.package_name=a.package_name"
+            + " where d.child_id=? and s.consent=true", (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                if (GameStore.isGame(rs.getString("package_name"),rs.getBoolean("system_game"),rs.getInt("classification")))
+                    packages.add(rs.getString("package_name"));
+            }, childId);
+        return config.toBuilder().addAllGamePackages(packages).build();
+    }
+
+    @org.springframework.transaction.annotation.Transactional
     public void saveRule(Rule rule) {
         jdbc.update("merge into rule (child_id, threshold_minutes, daily_limit_minutes, grace_minutes,"
                 + " enabled, version) key(child_id) values (?, ?, ?, ?, ?, ?)",
                 rule.childId(), rule.thresholdMinutes(), rule.dailyLimitMinutes(), rule.graceMinutes(),
                 rule.enabled(), rule.version());
+        var game = rule.gameMode();
+        jdbc.update("merge into game_rule (child_id,enabled,warning_seconds,extension_minutes,max_extensions)"
+            + " key(child_id) values (?,?,?,?,?)", rule.childId(), game.getEnabled(), game.getWarningSeconds(),
+            game.getExtensionMinutes(), game.getMaxExtensions());
         jdbc.update("delete from rule_watched_package where child_id = ?", rule.childId());
         for (var pkg : rule.watchedPackages()) {
             jdbc.update("insert into rule_watched_package (child_id, package_name) values (?, ?)",

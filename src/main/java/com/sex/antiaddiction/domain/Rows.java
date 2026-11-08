@@ -40,8 +40,14 @@ public final class Rows {
             int graceMinutes,
             boolean enabled,
             long version,
-            List<String> watchedPackages
+            List<String> watchedPackages,
+            com.quizgate.proto.GameModeRule gameMode
     ) {
+        public Rule(long childId, int thresholdMinutes, int dailyLimitMinutes, int graceMinutes,
+                boolean enabled, long version, List<String> watchedPackages) {
+            this(childId, thresholdMinutes, dailyLimitMinutes, graceMinutes, enabled, version, watchedPackages,
+                    com.quizgate.proto.GameModeRule.newBuilder().setMaxExtensions(2).build());
+        }
     }
 
     /**

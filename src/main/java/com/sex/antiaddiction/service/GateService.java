@@ -45,6 +45,7 @@ public class GateService {
     private final QuestionStore questions;
     private final UsageStore usage;
     private final GateEventStore events;
+    private final com.sex.antiaddiction.repo.GameApprovalStore gameApprovals;
     private final int defaultGrade;
     private final int defaultThresholdMinutes;
     private final int defaultDailyLimitMinutes;
@@ -54,6 +55,7 @@ public class GateService {
     private static final int MAX_DETAIL_CHARS = 200;
 
     public GateService(AccountStore accounts, QuestionStore questions, UsageStore usage, GateEventStore events,
+            com.sex.antiaddiction.repo.GameApprovalStore gameApprovals,
             @Value("${quizgate.default-grade:2}") int defaultGrade,
             @Value("${quizgate.default-threshold-minutes:30}") int defaultThresholdMinutes,
             @Value("${quizgate.default-daily-limit-minutes:120}") int defaultDailyLimitMinutes,
@@ -62,6 +64,7 @@ public class GateService {
         this.questions = questions;
         this.usage = usage;
         this.events = events;
+        this.gameApprovals = gameApprovals;
         this.defaultGrade = defaultGrade;
         this.defaultThresholdMinutes = defaultThresholdMinutes;
         this.defaultDailyLimitMinutes = defaultDailyLimitMinutes;
@@ -161,6 +164,7 @@ public class GateService {
         accounts.heartbeat(device.id(), now, request.getAccessibilityConnected());
         var rule = ruleOf(device.childId());
         var builder = HeartbeatReply.newBuilder().setServerTimeMs(now);
+        gameApprovals.rememberPolicy(device,rule,request);
         if (rule.version() != request.getKnownRuleVersion()) {
             builder.setRuleChanged(true).setRule(ruleProto(rule));
         }
@@ -251,6 +255,7 @@ public class GateService {
                 .setEnabled(rule.enabled())
                 .setVersion(rule.version())
                 .addAllWatchedPackages(rule.watchedPackages())
+                .setGameMode(rule.gameMode())
                 .build();
     }
 
