@@ -188,6 +188,10 @@ message HeartbeatReply {
   bool rule_changed = 1;
   RuleSnapshot rule = 2;
   int64 server_time_ms = 3;
+  // 这台设备是否已经挂到某个孩子名下。设备只有 enroll 那一次能拿到绑定码，
+  // 家长认领之后没人再通知它，手机就会一辈子把"去后台输入这六个字符"摆在首页上。
+  // 心跳是唯一稳定的往返通道，所以这个事实从这里回。
+  bool device_bound = 4;
 }
 
 // ── 拆闸门事件（孩子动手的证据）──────────────────────────

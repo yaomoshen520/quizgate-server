@@ -163,7 +163,10 @@ public class GateService {
         long now = System.currentTimeMillis();
         accounts.heartbeat(device.id(), now, request.getAccessibilityConnected());
         var rule = ruleOf(device.childId());
-        var builder = HeartbeatReply.newBuilder().setServerTimeMs(now);
+        var builder = HeartbeatReply.newBuilder().setServerTimeMs(now)
+                // 设备自己不知道有没有被认领：enroll 只在第一次跑，之后没人再告诉它。
+                // 不给这个事实，孩子手机上那张"去后台输入这六个字符"的卡片就永远撤不掉。
+                .setDeviceBound(device.childId() != 0L);
         gameApprovals.rememberPolicy(device,rule,request);
         if (rule.version() != request.getKnownRuleVersion()) {
             builder.setRuleChanged(true).setRule(ruleProto(rule));

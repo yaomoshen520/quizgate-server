@@ -46,13 +46,33 @@ field() { sed -n "s/^.*$1: \"\\(.*\\)\".*$/\\1/p" tmp-out.txt | head -1; }
 enc LoginRequest "username:\"$QUIZGATE_PARENT_USERNAME\" password:\"$QUIZGATE_PARENT_PASSWORD\""
 post api/parent/login - '1 家长登录' LoginReply
 PT=$(field parent_token)
+# 孩子的数据库主键不能写死成 1：空库第一次建号时它不一定是 1，
+# 而写死 1 的脚本只会在一复现就红的路上越走越远——它一直在偷用上一轮遗留的那个库。
+CHILD=$(field child_id)
+[ -n "$CHILD" ] || { echo " 第 1 步没从登录应答里解出 child_id，后面几步没有归属可查"; exit 1; }
 
 enc EnrollRequest "install_id:\"smoke-$(date +%s)\" device_model:\"Pixel4\" android_api_level:30"
 post api/device/enroll - '2 设备登记' EnrollReply
 DT=$(field device_token); CODE=$(field bind_code)
 
-enc BindDeviceRequest "child_id:\"1\" bind_code:\"$CODE\""
+enc BindDeviceRequest "child_id:\"$CHILD\" bind_code:\"$CODE\""
 post api/parent/bind-device "$PT" '3 家长认领设备' BindDeviceReply
+
+# 3b：刚登记、还没绑定的设备不能取题/判分/报用量。
+# 绑不上就先记账，用量会以 child_id=0 落库、且客户端已经把队列删了，绑定之后永远补不回来。
+enc EnrollRequest "install_id:\"smoke-unbound-$(date +%s)\" device_model:\"Pixel4\" android_api_level:30"
+post api/device/enroll - '3b0 第二台设备登记（不绑定）' EnrollReply
+UT=$(field device_token)
+for p in next-question usage; do
+  case $p in
+    next-question) enc NextQuestionRequest 'grade:2' ;;
+    usage) enc UsageReportRequest 'events:{event_id:"smoke-unbound-1" occurred_at_ms:1762000000000 app_package:"com.video.app" played_ms:60000}' ;;
+  esac
+  code=$(curl --ssl-no-revoke -s -X POST "$API/api/device/$p" -H "X-Quizgate-Token: $UT" \
+    -H 'Content-Type: application/x-protobuf' --data-binary @tmp-req.bin -o tmp-resp.bin -w '%{http_code}')
+  [ "$code" = "400" ] || { echo "3b 未绑定设备 $p 拿到 http=$code，期望 400"; exit 1; }
+  echo "3b 未绑定设备 $p 被拒（http=400）"
+done
 
 enc NextQuestionRequest 'grade:2'
 post api/device/next-question "$DT" '4 闸门取题' NextQuestionReply
@@ -69,11 +89,21 @@ post api/device/usage "$DT" '6b 同 event_id 重报' UsageReportReply
 
 enc HeartbeatRequest 'accessibility_connected:true accumulated_ms:120000 known_rule_version:0'
 post api/device/heartbeat "$DT" '7 心跳拉规则' HeartbeatReply
+# 7b：归属这件事要能随心跳回到设备上。设备只在 enroll 那一次见过绑定码，
+# 之后没人通知它，首页就会一辈子挂着"去后台抄这六个字符"。
+# 反向那半只看"不许出现 true"：proto3 的文本格式不打印取默认值的字段，
+# 未绑定的那台在这里根本不会出现 device_bound 这一行，硬要求它等于 false 是假断言。
+grep -q '^device_bound: true' tmp-out.txt || { echo "7b 已认领设备的心跳没回 device_bound: true"; exit 1; }
+post api/device/heartbeat "$UT" '7c 没认领的设备不许自称已绑定' HeartbeatReply
+if grep -q '^device_bound: true' tmp-out.txt; then
+  echo "7c 未认领设备自称已绑定，手机会把该显示的绑定码藏掉"; exit 1
+fi
+echo "7b/7c device_bound 两向都对"
 
-enc GetReportRequest 'child_id:"1" since_ms:0 until_ms:99999999999999'
+enc GetReportRequest "child_id:\"$CHILD\" since_ms:0 until_ms:99999999999999"
 post api/parent/get-report "$PT" '8 家长报表' GetReportReply
 
-enc UploadBankRequest 'child_id:"1" drafts:{subject:MATH knowledge_point:"烟测" stem:"1+1=?" options:"2" options:"3" correct_index:0 explanation:"个位相加"}'
+enc UploadBankRequest "child_id:\"$CHILD\" drafts:{subject:MATH knowledge_point:\"烟测\" stem:\"1+1=?\" options:\"2\" options:\"3\" correct_index:0 explanation:\"个位相加\"}"
 post api/parent/upload-bank "$PT" '9 家长上传私有题' UploadBankReply
 
 enc NextQuestionRequest 'grade:99'
@@ -97,13 +127,27 @@ for file in $(cd src/main/resources/static && find . -type f ! -name index.html 
   [ "$code" = 200 ] || { echo " $file http=$code（前端产物和镜像不同步：先 npm run build 再重新出包）"; exit 1; }
   count=$((count + 1))
 done
+# 目录形状的请求是 native 才会露馅的那一半：JVM 上读目录抛异常，而镜像里 classpath 目录节点
+# 真能读出一个"每行一个文件名"的清单——修复前 GET /assets/ 就是 200 加整包 js/css 名单。
+# 所以这里既钉状态码，也把正文再查一遍：只要有以 .js/.css/.png 结尾的行出现，清单就没堵住。
+for dir in /assets/ /assets; do
+  body=$(curl -s -w '\n%{http_code}' "$API$dir")
+  code=${body##*$'\n'}
+  [ "$code" = 404 ] || { echo " $dir 本该 404，实得 $code（产物目录清单泄露）"; exit 1; }
+  if printf '%s' "${body%$'\n'*}" | grep -qE '\.(js|css|png|svg|woff2?)$'; then
+    echo " $dir 的响应体里出现了文件名，目录清单没堵住"; exit 1
+  fi
+done
+# 缺文件必须是 404 而不是 500：兜底那条 Exception 会把 NoResourceFoundException 吞成服务端故障。
+nofile=$(curl -s -o /dev/null -w '%{http_code}' "$API/assets/no-such-file-here.js")
+[ "$nofile" = 404 ] || { echo " 缺失产物本该 404，实得 $nofile"; exit 1; }
 # 拼 URL 一律 "$API/$file"，file 不带前导斜杠；多一个斜杠就成了 //assets/...，
 # 那种畸形路径归兜底链拒绝，看着就像产物没打进去——这一步我第一次就是这么误判的。
 malformed=$(curl -s -o /dev/null -w '%{http_code}' "$API//assets/x.js")
 [ "$malformed" = 401 ] || [ "$malformed" = 403 ] || { echo " // 畸形路径本该被兜底链拒，实得 $malformed"; exit 1; }
 deny=$(curl -s -o /dev/null -w '%{http_code}' "$API/WEB-INF/web.xml")
 [ "$deny" = 401 ] || [ "$deny" = 403 ] || { echo " 未知路径本该被拒，实得 $deny"; exit 1; }
-echo " 首页 200 · 产物 $count 个全 200 · //畸形路径 $malformed · 未知路径 $deny"
+echo " 首页 200 · 产物 $count 个全 200 · 目录形状 404 · 缺文件 404 · //畸形路径 $malformed · 未知路径 $deny"
 
 # 角色分档。这一步一次验两件只有原生二进制才会暴露的事：
 # 一是新增的 AccountSummary/ListAccountsReply 这些生成类没注册反射时，JVM 全绿而镜像里解回空；
@@ -161,12 +205,12 @@ echo "13e 重放注册码被拒（http=$code）"
 # 这几步用的全是 S7 新增的消息类（GetRuleReply/BankQuestion/带机型的 ChildSummary）——
 # 反射元数据少注册一个字段时 JVM 全绿、镜像里解回空报文，只有真打一遍才看得见。
 CID=$(field child_id)   # 13f 那份列表里的第一个孩子，属于刚自助注册出来的家长
-enc SaveRuleRequest 'child_id:"1" rule:{threshold_minutes:22 daily_limit_minutes:90 grace_minutes:3 enabled:true}'
+enc SaveRuleRequest "child_id:\"$CHILD\" rule:{threshold_minutes:22 daily_limit_minutes:90 grace_minutes:3 enabled:true}"
 post api/parent/save-rule "$PT" '14a 家长写一条非默认规则' RuleSnapshot
 WVER=$(sed -n 's/.*version: \([0-9]*\).*/\1/p' tmp-out.txt | head -1)
 [ -n "$WVER" ] || { echo " 14a 没解出 version，后面的比对没有意义"; exit 1; }
 
-enc GetRuleRequest 'child_id:"1"'
+enc GetRuleRequest "child_id:\"$CHILD\""
 post api/parent/get-rule "$PT" '14b 家长读回刚写那一条' GetRuleReply
 RTHR=$(sed -n 's/.*threshold_minutes: \([0-9]*\).*/\1/p' tmp-out.txt | head -1)
 RVER=$(sed -n 's/.*version: \([0-9]*\).*/\1/p' tmp-out.txt | head -1)
@@ -197,7 +241,7 @@ grep -q 'question_id: ' tmp-out.txt || { echo " 回显没带题号，家长改�
 # 14g：越界的两条读路径。前一条刚建好数据，正适合拿来当"别人家的孩子"。
 for probe in "GetRuleRequest:get-rule" "ListBankRequest:list-bank"; do
   msg=${probe%%:*}; path=${probe##*:}
-  enc "$msg" 'child_id:"1"'
+  enc "$msg" "child_id:\"$CHILD\""
   code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/parent/$path" \
     -H "X-Quizgate-Token: $RT" -H 'Content-Type: application/x-protobuf' --data-binary @tmp-req.bin)
   [ "$code" != 200 ] || { echo " 别的家长竟然读到了孩子 1 的 $path，越界只挡在按钮上"; exit 1; }
@@ -300,13 +344,13 @@ enc HeartbeatRequest "accessibility_connected:false accumulated_ms:0 known_rule_
 post api/device/heartbeat "$DT" '16f 心跳说无障碍被关了' HeartbeatReply
 enc ListChildrenRequest ''
 post api/parent/list-children "$PT" '16g 家长列表读出无障碍=关' ListChildrenReply
-child_block 1 | grep -q 'accessibility_state: 2' || { echo " child 1 的无障碍状态没读出「被关了」"; exit 1; }
+child_block "$CHILD" | grep -q 'accessibility_state: 2' || { echo " 自家孩子的无障碍状态没读出「被关了」"; exit 1; }
 
 enc HeartbeatRequest "accessibility_connected:true accumulated_ms:0 known_rule_version:0"
 post api/device/heartbeat "$DT" '16h 心跳说无障碍恢复了' HeartbeatReply
 enc ListChildrenRequest ''
 post api/parent/list-children "$PT" '16i 家长列表读出无障碍=开' ListChildrenReply
-child_block 1 | grep -q 'accessibility_state: 1' || { echo " child 1 的无障碍状态没读出「连着」"; exit 1; }
+child_block "$CHILD" | grep -q 'accessibility_state: 1' || { echo " 自家孩子的无障碍状态没读出「连着」"; exit 1; }
 echo "16j 三值门在原生二进制上成立（不知道 / 关 / 开 各归各位）"
 
 rm -f tmp-req.bin tmp-resp.bin tmp-out.txt tmp-index.html

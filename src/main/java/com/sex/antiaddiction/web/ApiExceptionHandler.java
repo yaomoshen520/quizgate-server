@@ -10,6 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -25,6 +26,18 @@ public class ApiExceptionHandler {
     @ExceptionHandler(AuthFailed.class)
     public ResponseEntity<String> unauthorized(AuthFailed e) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).contentType(TEXT).body(e.getMessage());
+    }
+
+    /**
+     * 静态资源没命中是"这里没这个文件"，不是"服务端崩了"。
+     * <p>
+     * 它必须写在兜底之前单独接住：NoResourceFoundException 继承 ServletException，
+     * 落到下面那条 Exception 兜底就变成 500——浏览器只是少拿到一个 hash 过的 js 文件，
+     * 运维却在日志里看到一片服务端故障。状态码用异常自带的，不在这里重新猜。
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<String> missingResource(NoResourceFoundException e) {
+        return ResponseEntity.status(e.getStatusCode()).contentType(TEXT).body("资源不存在");
     }
 
     /**

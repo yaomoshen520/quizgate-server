@@ -1306,6 +1306,49 @@ class GateFlowTest {
         assertEquals(1,latest.getRequestsCount());
     }
 
+    /**
+     * 静态资源面的两条不变量，各自的可证范围不同，别混着说。
+     * <p>
+     * probe.js 是本测试自带的夹具（src/test/resources/static/assets/）：先证明"带扩展名的文件还能取到"，
+     * 后面那几个 404 才有意义——否则整条测试会退化成"什么都 404 也算过"。
+     * <p>
+     * 缺文件那条在这里是真有牙的：摘掉 ApiExceptionHandler 的 NoResourceFoundException 分支，
+     * 本测试立刻红在 expected 404 but was 500。
+     * 目录那三条在 JVM 上是"双重保险"——Spring 自己在 JVM 上就解析不出目录，所以本测试证明不了
+     * StaticResourceConfig 的生效；目录清单只在 GraalVM 原生二进制里看得见，由 native-smoke 的
+     * curl 断言覆盖（改前 GET /assets/ 是 200 加一份文件名清单）。
+     */
+    @Test
+    void 前端产物按文件名取_缺文件给404_目录形状不回() throws Exception {
+        mvc.perform(get("/assets/probe.js")).andExpect(status().isOk());
+        mvc.perform(get("/assets/no-such-file.js")).andExpect(status().isNotFound());
+        mvc.perform(get("/assets/")).andExpect(status().isNotFound());
+        mvc.perform(get("/assets")).andExpect(status().isNotFound());
+        mvc.perform(get("/assets/.env")).andExpect(status().isNotFound());
+    }
+
+    /**
+     * 认领这个事实必须能传回手机上。
+     * <p>
+     * 设备只在 enroll 那一次拿到绑定码，之后没有任何通道告诉它"家长已经用掉了这个码"，
+     * 于是孩子手机首页那张"去后台输入这六个字符"的卡片会一直在——家长明明做完了，
+     * 屏幕上还在催他做第二遍。心跳是唯一稳定的往返，所以这个布尔必须由心跳带回。
+     */
+    @Test
+    void 认领前后的心跳分别回未绑定与已绑定() throws Exception {
+        var home = newHousehold("认领");
+        String install = freshInstall();
+        String token = enroll(install).getDeviceToken();
+        byte[] idle = HeartbeatRequest.getDefaultInstance().toByteArray();
+        assertFalse(HeartbeatReply.parseFrom(exchangePost("/api/device/heartbeat", token, idle)).getDeviceBound(),
+                "没认领的设备不能自称已绑定，否则手机会把该显示的绑定码藏掉");
+        BindDeviceReply.parseFrom(bind(home.token(), home.childId(), enroll(install).getBindCode()));
+        // enroll 对已登记设备不再发码，所以这一步的认领只能用第一次拿到的码——
+        // 上面那句 enroll(install) 拿到的是同一台设备的第二个令牌，绑定状态跟着 install_id 走。
+        assertTrue(HeartbeatReply.parseFrom(exchangePost("/api/device/heartbeat", token, idle)).getDeviceBound(),
+                "家长认领过后心跳就该告诉设备它已经对上，手机才有依据撤掉那张卡片");
+    }
+
     private byte[] exchangePost(String path, String token, byte[] body) throws Exception {
         var request = post(path).contentType(PROTOBUF).content(body);
         if (token != null) {

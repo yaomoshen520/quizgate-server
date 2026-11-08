@@ -42,6 +42,7 @@ build/
 # 而里面躺着令牌、口令散量、绑定码和题库——公开仓库一旦被它们混进去就收不回来。
 /data-*.mv.db
 /data-*.lock.db
+/data-*.bak
 *.log
 /tmp-*
 
