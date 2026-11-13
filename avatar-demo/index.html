@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>萌宠星球 · three.js 虚拟宠物 Demo</title>
+<style>
+  :root{
+    --bg0:#160f2e; --bg1:#241650; --bg2:#34206b;
+    --panel:rgba(28,17,56,.74); --panel-line:rgba(255,255,255,.12);
+    --ink:#fff7ff; --ink-soft:#c9b8e8; --ink-faint:#8f7cb8;
+    --pink:#ff6fa5; --peach:#ffb37a; --mint:#5fe3b3; --sky:#5fc8ff;
+    --sun:#ffd166; --grape:#b388ff;
+    --r-lg:22px; --r-md:14px; --r-sm:10px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:var(--ink);
+    background:
+      radial-gradient(1200px 700px at 80% -10%, rgba(255,111,165,.26), transparent 60%),
+      radial-gradient(1000px 800px at 6% 112%, rgba(95,200,255,.2), transparent 55%),
+      radial-gradient(900px 600px at 50% 50%, rgba(179,136,255,.15), transparent 70%),
+      linear-gradient(160deg,var(--bg0),var(--bg1) 55%,var(--bg2));
+  }
+  #stage{position:fixed;inset:0} canvas{display:block}
+  .topbar{position:fixed;top:0;left:0;right:0;z-index:20;display:flex;align-items:center;gap:16px;padding:16px 24px;background:linear-gradient(180deg,rgba(18,9,38,.72),transparent);pointer-events:none}
+  .topbar>*{pointer-events:auto}
+  .logo{display:flex;align-items:center;gap:12px}
+  .logo .orb{width:44px;height:44px;border-radius:15px;background:conic-gradient(from 210deg,var(--pink),var(--sun),var(--mint),var(--sky),var(--grape),var(--pink));box-shadow:0 6px 22px rgba(255,111,165,.45),inset 0 0 12px rgba(255,255,255,.4);display:grid;place-items:center;font-size:24px}
+  .logo h1{font-size:20px;font-weight:800;letter-spacing:.5px}
+  .logo h1 span{background:linear-gradient(90deg,var(--pink),var(--sun),var(--mint));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .logo p{font-size:12px;color:var(--ink-soft)}
+  .anim-bar{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .chip{border:1px solid var(--panel-line);background:var(--panel);color:var(--ink);padding:9px 16px;border-radius:999px;cursor:pointer;font-size:13px;font-weight:600;backdrop-filter:blur(12px);transition:transform .15s,box-shadow .2s}
+  .chip:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(0,0,0,.3)}
+  .chip.on{background:linear-gradient(90deg,var(--pink),var(--grape));border-color:transparent;box-shadow:0 6px 20px rgba(255,111,165,.5)}
+  .panel{position:fixed;top:84px;right:20px;bottom:120px;width:300px;z-index:15;background:var(--panel);border:1px solid var(--panel-line);border-radius:var(--r-lg);backdrop-filter:blur(18px);box-shadow:0 20px 60px rgba(0,0,0,.4);padding:18px;overflow-y:auto}
+  .panel::-webkit-scrollbar{width:8px}
+  .panel::-webkit-scrollbar-track{background:rgba(255,255,255,.05);border-radius:99px}
+  .panel::-webkit-scrollbar-thumb{background:linear-gradient(var(--pink),var(--grape));border-radius:99px}
+  .panel h2{font-size:14px;font-weight:800;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .panel h2 .dot{width:8px;height:8px;border-radius:50%;background:var(--mint);box-shadow:0 0 10px var(--mint)}
+  .panel .sub{font-size:11px;color:var(--ink-faint);margin-bottom:14px}
+  .group{margin-bottom:16px}
+  .group .label{font-size:12px;color:var(--ink-soft);font-weight:700;margin-bottom:8px;display:flex;justify-content:space-between}
+  .group .label output{color:var(--sun);font-weight:700}
+  .swatches{display:flex;gap:8px;flex-wrap:wrap}
+  .sw{width:30px;height:30px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:.15s;box-shadow:inset 0 0 6px rgba(0,0,0,.2)}
+  .sw.on{border-color:#fff;transform:scale(1.15);box-shadow:0 0 12px rgba(255,255,255,.5)}
+  input[type=range]{width:100%;-webkit-appearance:none;height:22px;background:transparent;cursor:pointer}
+  input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:linear-gradient(90deg,var(--pink),var(--sun),var(--mint))}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;margin-top:-6px;border-radius:50%;background:#fff;border:3px solid var(--grape);box-shadow:0 2px 8px rgba(0,0,0,.4)}
+  select{width:100%;padding:9px 12px;border-radius:var(--r-sm);border:1px solid var(--panel-line);background:rgba(255,255,255,.07);color:var(--ink);font-size:13px;cursor:pointer;outline:none}
+  select option{background:var(--bg1);color:var(--ink)}
+  .toggle{display:flex;align-items:center;justify-content:space-between;padding:6px 0}
+  .toggle span{font-size:12px;color:var(--ink-soft);font-weight:600}
+  .switch{width:42px;height:24px;border-radius:99px;background:rgba(255,255,255,.15);position:relative;cursor:pointer;transition:.2s}
+  .switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}
+  .switch.on{background:linear-gradient(90deg,var(--mint),var(--sky))}
+  .switch.on::after{left:21px}
+  .actions{display:flex;gap:8px;margin-top:6px}
+  .actions button{flex:1;padding:10px 0;border-radius:var(--r-sm);border:none;cursor:pointer;font-weight:700;font-size:12px;color:#fff;transition:.15s}
+  .actions button:hover{transform:translateY(-2px)}
+  .btn-rand{background:linear-gradient(90deg,var(--grape),var(--sky))}
+  .btn-reset{background:rgba(255,255,255,.12)}
+  .btn-shot{background:linear-gradient(90deg,var(--pink),var(--peach))}
+  .gallery{position:fixed;left:20px;right:340px;bottom:18px;z-index:15;display:flex;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--panel-line);border-radius:var(--r-lg);backdrop-filter:blur(18px);padding:12px 16px;overflow-x:auto}
+  .gallery::-webkit-scrollbar{height:8px}
+  .gallery::-webkit-scrollbar-track{background:rgba(255,255,255,.05);border-radius:99px}
+  .gallery::-webkit-scrollbar-thumb{background:linear-gradient(90deg,var(--sky),var(--mint));border-radius:99px}
+  .gallery .g-title{font-size:12px;color:var(--ink-soft);font-weight:800;white-space:nowrap;margin-right:4px}
+  .pet{flex:none;width:66px;text-align:center;cursor:pointer;border-radius:var(--r-md);padding:6px 4px;border:1px solid transparent;transition:.18s}
+  .pet:hover{background:rgba(255,255,255,.07);transform:translateY(-3px)}
+  .pet.on{border-color:var(--sun);background:rgba(255,209,102,.12)}
+  .pet .face{width:46px;height:46px;margin:0 auto;border-radius:50%;display:grid;place-items:center;font-size:26px;box-shadow:inset 0 -4px 8px rgba(0,0,0,.15)}
+  .pet .g{font-size:10px;color:var(--ink-soft);margin-top:4px;font-weight:600}
+  .hint{position:fixed;left:24px;top:84px;z-index:10;font-size:12px;color:var(--ink-faint);background:rgba(18,9,38,.4);padding:8px 14px;border-radius:99px;backdrop-filter:blur(8px)}
+  .panel-grip,.panel-close,.fab,.scrim{display:none}
+  @media(max-width:820px){
+    .topbar{padding:10px 14px;gap:10px}
+    .logo .orb{width:36px;height:36px;font-size:19px;border-radius:12px}
+    .logo h1{font-size:16px}
+    .logo p{display:none}
+    .anim-bar{margin-left:auto;flex-wrap:nowrap;overflow-x:auto;max-width:54vw;scrollbar-width:none}
+    .anim-bar::-webkit-scrollbar{display:none}
+    .chip{padding:7px 12px;font-size:12px;white-space:nowrap;flex:none}
+    .hint{display:none}
+    .gallery{left:10px;right:10px;bottom:10px;padding:8px 10px;gap:6px;border-radius:18px}
+    .gallery .g-title{display:none}
+    .pet{width:56px;padding:4px 2px}
+    .pet .face{width:40px;height:40px;font-size:22px}
+    .pet .g{font-size:9px}
+    .fab{display:flex;position:fixed;right:14px;bottom:98px;z-index:18;align-items:center;gap:6px;padding:13px 20px;border:none;border-radius:999px;cursor:pointer;color:#fff;font-size:16px;font-weight:800;background:linear-gradient(135deg,var(--pink),var(--grape));box-shadow:0 10px 28px rgba(255,111,165,.5)}
+    .fab span{font-size:13px}
+    .scrim{display:block;position:fixed;inset:0;z-index:24;background:rgba(10,5,25,.5);backdrop-filter:blur(2px);opacity:0;pointer-events:none;transition:.25s}
+    .scrim.on{opacity:1;pointer-events:auto}
+    .panel{top:auto;left:0;right:0;bottom:0;width:100%;max-height:72vh;border-radius:24px 24px 0 0;transform:translateY(105%);transition:transform .3s cubic-bezier(.2,.8,.2,1);z-index:25;padding:8px 18px 26px}
+    .panel.open{transform:translateY(0)}
+    .panel-grip{display:flex;justify-content:center;padding:6px 0 10px;cursor:pointer}
+    .panel-grip span{width:44px;height:5px;border-radius:99px;background:rgba(255,255,255,.25)}
+    .panel-close{display:grid;place-items:center;margin-left:auto;width:30px;height:30px;border-radius:50%;border:1px solid var(--panel-line);background:rgba(255,255,255,.08);color:var(--ink-soft);cursor:pointer;font-size:13px}
+  }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div class="topbar">
+  <div class="logo"><div class="orb">🐾</div><div><h1>萌宠<span>星球</span></h1><p>three.js 程序化萌系虚拟宠物 · 1-9 年级</p></div></div>
+  <div class="anim-bar" id="animBar">
+    <button class="chip on" data-anim="idle">待机</button>
+    <button class="chip" data-anim="wave">挥手</button>
+    <button class="chip" data-anim="jump">跳跃</button>
+    <button class="chip" data-anim="dance">跳舞</button>
+    <button class="chip" data-anim="spin">转圈</button>
+  </div>
+</div>
+<div class="hint">🖱 拖拽旋转 · 滚轮缩放 · 右侧换装</div>
+<div class="panel" id="panel">
+  <div class="panel-grip" id="panelGrip"><span></span></div>
+  <h2><span class="dot"></span>萌宠工坊 <button class="panel-close" id="panelClose" aria-label="收起">✕</button></h2>
+  <div class="sub">实时调整，立刻看到变化</div>
+  <div class="group"><div class="label">宠物种类</div>
+    <select id="species">
+      <option value="fox">🦊 小狐狸</option><option value="cat">🐱 小猫咪</option>
+      <option value="bunny">🐰 小兔子</option><option value="panda">🐼 小熊猫</option>
+      <option value="dragon">🐲 小火龙</option><option value="unicorn">🦄 独角兽</option>
+      <option value="penguin">🐧 小企鹅</option><option value="puppy">🐶 小狗狗</option>
+      <option value="slime">🫧 史莱姆</option>
+    </select>
+  </div>
+  <div class="group"><div class="label">主色</div><div class="swatches" id="mainColor"></div></div>
+  <div class="group"><div class="label">肚皮/副色</div><div class="swatches" id="bellyColor"></div></div>
+  <div class="group"><div class="label">配饰</div>
+    <select id="accessory"><option value="none">无</option><option value="bow">蝴蝶结</option><option value="scarf">小围巾</option><option value="crown">小皇冠</option><option value="glasses">圆眼镜</option><option value="flower">小花</option></select>
+  </div>
+  <div class="group"><div class="label">眼睛大小 <output id="eyeOut">1.0</output></div><input type="range" id="eyeSize" min="0.7" max="1.5" step="0.05" value="1"></div>
+  <div class="group"><div class="label">圆润度 <output id="plumpOut">1.0</output></div><input type="range" id="plump" min="0.8" max="1.35" step="0.05" value="1"></div>
+  <div class="group">
+    <div class="toggle"><span>腮红</span><div class="switch on" id="blushToggle"></div></div>
+    <div class="toggle"><span>自动旋转</span><div class="switch on" id="rotateToggle"></div></div>
+    <div class="toggle"><span>背景星光</span><div class="switch on" id="starsToggle"></div></div>
+  </div>
+  <div class="actions"><button class="btn-rand" id="randBtn">🎲 随机</button><button class="btn-reset" id="resetBtn">重置</button><button class="btn-shot" id="shotBtn">📷 截图</button></div>
+</div>
+<div class="gallery" id="gallery"><div class="g-title">宠物<br>图鉴</div></div>
+<div class="scrim" id="scrim"></div>
+<button class="fab" id="fab" aria-label="打开换装工坊">🎨<span>换装</span></button>
+
+<script src="vendor/three.min.js"></script>
+<script>
+/* 兼容老浏览器/微信内核：经典脚本 + 全局 THREE，无 importmap/ES 模块/CDN */
+function OrbitCam(cam,dom,target){
+  this.target=target.clone();this.theta=0;this.phi=Math.PI/2.3;this.radius=8;
+  this.tTheta=0;this.tPhi=this.phi;this.tRadius=8;this.autoRotate=true;this.autoSpeed=1.1;
+  this.minR=4;this.maxR=15;this.minPhi=.35;this.maxPhi=Math.PI*.55;
+  var self=this,drag=false,px=0,py=0,pinch=0;
+  function down(x,y){drag=true;px=x;py=y;}
+  function move(x,y){if(!drag)return;var dx=x-px,dy=y-py;px=x;py=y;self.tTheta-=dx*.005;self.tPhi=Math.max(self.minPhi,Math.min(self.maxPhi,self.tPhi-dy*.005));}
+  function up(){drag=false;}
+  function zoom(f){self.tRadius=Math.max(self.minR,Math.min(self.maxR,self.tRadius*f));}
+  dom.addEventListener('mousedown',function(e){down(e.clientX,e.clientY);});
+  window.addEventListener('mousemove',function(e){move(e.clientX,e.clientY);});
+  window.addEventListener('mouseup',up);
+  dom.addEventListener('wheel',function(e){e.preventDefault();zoom(1+e.deltaY*.001);},{passive:false});
+  dom.addEventListener('touchstart',function(e){if(e.touches.length===1)down(e.touches[0].clientX,e.touches[0].clientY);else if(e.touches.length===2)pinch=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);},{passive:true});
+  dom.addEventListener('touchmove',function(e){e.preventDefault();if(e.touches.length===1)move(e.touches[0].clientX,e.touches[0].clientY);else if(e.touches.length===2){var d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);if(pinch>0)zoom(pinch/d);pinch=d;}},{passive:false});
+  dom.addEventListener('touchend',up);
+  this.update=function(dt){if(this.autoRotate&&!drag)this.tTheta+=this.autoSpeed*dt*.12;this.theta+=(this.tTheta-this.theta)*.08;this.phi+=(this.tPhi-this.phi)*.08;this.radius+=(this.tRadius-this.radius)*.08;var sp=Math.sin(this.phi);cam.position.set(this.target.x+this.radius*sp*Math.sin(this.theta),this.target.y+this.radius*Math.cos(this.phi),this.target.z+this.radius*sp*Math.cos(this.theta));cam.lookAt(this.target);};
+}
+
+const stage=document.getElementById('stage');
+if(THREE.ColorManagement)THREE.ColorManagement.legacyMode=false;
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true,preserveDrawingBuffer:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.outputEncoding=THREE.sRGBEncoding;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.0;
+stage.appendChild(renderer.domElement);
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,.1,100);camera.position.set(0,1.6,8);
+const controls=new OrbitCam(camera,renderer.domElement,new THREE.Vector3(0,1.1,0));
+
+scene.add(new THREE.HemisphereLight(0xfff0f5,0x3a2a6a,.75));
+const key=new THREE.DirectionalLight(0xffe6c8,1.5);key.position.set(4,7,5);key.castShadow=true;
+key.shadow.mapSize.set(2048,2048);key.shadow.camera.left=-6;key.shadow.camera.right=6;key.shadow.camera.top=6;key.shadow.camera.bottom=-6;key.shadow.radius=6;key.shadow.bias=-0.0005;scene.add(key);
+const rim=new THREE.DirectionalLight(0x7fd8ff,1.0);rim.position.set(-5,4,-6);scene.add(rim);
+const fill=new THREE.DirectionalLight(0xff9fc8,.5);fill.position.set(-3,2,5);scene.add(fill);
+
+const ground=new THREE.Mesh(new THREE.CylinderGeometry(4.2,4.6,.5,64),new THREE.MeshStandardMaterial({color:0x4a3585,roughness:.85}));
+ground.position.y=-.25;ground.receiveShadow=true;scene.add(ground);
+const ring=new THREE.Mesh(new THREE.TorusGeometry(4.2,.07,16,100),new THREE.MeshStandardMaterial({color:0xffd166,emissive:0xffa63d,emissiveIntensity:.8,roughness:.4}));
+ring.rotation.x=Math.PI/2;ring.position.y=.02;scene.add(ring);
+
+const starGeo=new THREE.BufferGeometry();const N=260,pos=new Float32Array(N*3),col=new Float32Array(N*3);
+const pal=[0xff6fa5,0xffd166,0x5fe3b3,0x5fc8ff,0xb388ff].map(c=>new THREE.Color(c));
+for(let i=0;i<N;i++){const r=9+Math.random()*14,th=Math.random()*Math.PI*2,ph=Math.acos(2*Math.random()-1);
+pos[i*3]=r*Math.sin(ph)*Math.cos(th);pos[i*3+1]=Math.abs(r*Math.cos(ph))*.7+1;pos[i*3+2]=r*Math.sin(ph)*Math.sin(th);
+const c=pal[i%pal.length];col[i*3]=c.r;col[i*3+1]=c.g;col[i*3+2]=c.b;}
+starGeo.setAttribute('position',new THREE.BufferAttribute(pos,3));starGeo.setAttribute('color',new THREE.BufferAttribute(col,3));
+const stars=new THREE.Points(starGeo,new THREE.PointsMaterial({size:.14,vertexColors:true,transparent:true,opacity:.85,depthWrite:false}));scene.add(stars);
+
+const mat=(c,r=.55)=>new THREE.MeshStandardMaterial({color:c,roughness:r,metalness:.02});
+const MAIN_COLORS=['#ff9a5c','#ffb3c8','#b388ff','#5fc8ff','#5fe3b3','#ffd166','#f5f0ff','#8a6a50','#ff6f8a'];
+const BELLY_COLORS=['#fff5ec','#ffe0ec','#e8dcff','#dcf2ff','#dcfff0','#fff3d0','#ffffff','#f0e0d0'];
+
+const state={species:'fox',mainColor:MAIN_COLORS[0],bellyColor:BELLY_COLORS[0],accessory:'none',eyeSize:1,plump:1,blush:true};
+let pet=null;const rig={};
+
+function buildPet(cfg){
+  const g=new THREE.Group();const P=cfg.plump;
+  const main=mat(cfg.mainColor),belly=mat(cfg.bellyColor,.6),dark=mat(0x3a2a30,.4);
+  // 圆滚滚身体
+  const body=new THREE.Mesh(new THREE.SphereGeometry(1*P,48,48),main);
+  body.scale.set(1,1.05,.95);body.position.y=1.05;body.castShadow=true;g.add(body);
+  // 肚皮
+  const bel=new THREE.Mesh(new THREE.SphereGeometry(.72*P,32,32),belly);
+  bel.scale.set(.85,.9,.5);bel.position.set(0,.85,.62);g.add(bel);
+  // 小脚
+  const footGeo=new THREE.SphereGeometry(.26*P,20,20);
+  const fL=new THREE.Mesh(footGeo,main);fL.scale.set(1,.7,1.2);fL.position.set(-.42*P,.18,.25);fL.castShadow=true;
+  const fR=fL.clone();fR.position.x=.42*P;g.add(fL,fR);
+  // 小手
+  const handGeo=new THREE.SphereGeometry(.2*P,18,18);
+  const hL=new THREE.Group();const hLm=new THREE.Mesh(handGeo,main);hLm.position.y=-.15;hL.add(hLm);hL.position.set(-.95*P,1.0,.2);
+  const hR=new THREE.Group();const hRm=new THREE.Mesh(handGeo,main);hRm.position.y=-.15;hR.add(hRm);hR.position.set(.95*P,1.0,.2);
+  g.add(hL,hR);
+  // 大眼睛
+  const E=cfg.eyeSize;
+  const white=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.15});
+  const iris=new THREE.MeshStandardMaterial({color:0x3a2a40,roughness:.1});
+  function eye(x){const grp=new THREE.Group();
+    const w=new THREE.Mesh(new THREE.SphereGeometry(.24*E,28,28),white);w.scale.set(1,1.25,.5);
+    const d=new THREE.Mesh(new THREE.SphereGeometry(.16*E,24,24),iris);d.position.set(0,-.01,.13);d.scale.set(1,1.25,.5);
+    const h1=new THREE.Mesh(new THREE.SphereGeometry(.06*E,12,12),new THREE.MeshBasicMaterial({color:0xffffff}));h1.position.set(.06,.09,.22);
+    const h2=new THREE.Mesh(new THREE.SphereGeometry(.03*E,10,10),new THREE.MeshBasicMaterial({color:0xffffff}));h2.position.set(-.05,-.05,.22);
+    grp.add(w,d,h1,h2);grp.position.set(x,1.35,.9);return grp;}
+  const eyeL=eye(-.36),eyeR=eye(.36);g.add(eyeL,eyeR);
+  // 腮红
+  if(cfg.blush){const bm=new THREE.MeshBasicMaterial({color:0xff9fb0,transparent:true,opacity:.6});
+    const bL=new THREE.Mesh(new THREE.SphereGeometry(.15,16,16),bm);bL.scale.set(1,.6,.3);bL.position.set(-.62,1.05,.88);
+    const bR=bL.clone();bR.position.x=.62;g.add(bL,bR);}
+  // 嘴
+  const mouth=new THREE.Mesh(new THREE.TorusGeometry(.1,.03,10,20,Math.PI),mat(0xc85a5a,.4));
+  mouth.position.set(0,1.02,.96);mouth.rotation.x=Math.PI;g.add(mouth);
+
+  addSpecies(g,cfg,main,belly,dark);
+  addAccessory(g,cfg);
+  rig.root=g;rig.body=body;rig.handL=hL;rig.handR=hR;rig.eyeL=eyeL;rig.eyeR=eyeR;rig.footL=fL;rig.footR=fR;
+  rig.baseY=0;rig.baseHL=hL.rotation.z;rig.baseHR=hR.rotation.z;
+  return g;
+}
+
+function addSpecies(g,cfg,main,belly,dark){
+  const s=cfg.species;const P=cfg.plump;
+  const ear=(x,geo,m,rot)=>{const e=new THREE.Mesh(geo,m);e.position.set(x,2.0,0);e.castShadow=true;if(rot)e.rotation.z=rot;g.add(e);return e;};
+  if(s==='fox'||s==='cat'){
+    const eg=new THREE.ConeGeometry(.3,.55,4);
+    ear(-.5,eg,main,.3);ear(.5,eg,main,-.3);
+    const inner=new THREE.ConeGeometry(.15,.3,4);ear(-.5,inner,belly,.3).position.y=1.95;ear(.5,inner,belly,-.3).position.y=1.95;
+    // 尾巴
+    const tail=new THREE.Mesh(new THREE.SphereGeometry(.35,20,20),main);tail.scale.set(.7,1.4,.7);tail.position.set(0,.9,-1.0);tail.rotation.x=-.5;g.add(tail);
+    const tip=new THREE.Mesh(new THREE.SphereGeometry(.2,16,16),belly);tip.position.set(0,1.35,-1.2);g.add(tip);
+    if(s==='cat'){ // 胡须
+      const wm=mat(0xffffff,.3);for(const sx of[-1,1])for(let i=0;i<2;i++){const w=new THREE.Mesh(new THREE.CylinderGeometry(.012,.012,.4,6),wm);w.rotation.z=Math.PI/2+(i-.5)*.2;w.position.set(sx*.7,1.0-i*.1,.85);g.add(w);} }
+  } else if(s==='bunny'){
+    const eg=new THREE.CapsuleGeometry(.16,.7,8,16);
+    ear(-.35,eg,main,.15);ear(.35,eg,main,-.15);
+    const inner=new THREE.CapsuleGeometry(.08,.5,8,12);ear(-.35,inner,belly,.15).position.y=1.95;ear(.35,inner,belly,-.15).position.y=1.95;
+    const tail=new THREE.Mesh(new THREE.SphereGeometry(.25,16,16),belly);tail.position.set(0,.8,-1.0);g.add(tail);
+  } else if(s==='panda'){
+    const eg=new THREE.SphereGeometry(.28,20,20);ear(-.55,eg,dark);ear(.55,eg,dark);
+    // 黑眼圈
+    const pm=mat(0x3a2a30,.4);const pL=new THREE.Mesh(new THREE.SphereGeometry(.3,20,20),pm);pL.scale.set(1,1.2,.4);pL.position.set(-.36,1.35,.7);
+    const pR=pL.clone();pR.position.x=.36;g.add(pL,pR);
+    const tail=new THREE.Mesh(new THREE.SphereGeometry(.2,16,16),dark);tail.position.set(0,.8,-1.0);g.add(tail);
+  } else if(s==='dragon'){
+    const horn=new THREE.ConeGeometry(.14,.4,10);const hm=mat(0xffd166,.3);
+    ear(-.35,horn,hm,.2);ear(.35,horn,hm,-.2);
+    // 翅膀
+    const wm=mat(cfg.bellyColor,.5);for(const sx of[-1,1]){const w=new THREE.Mesh(new THREE.ConeGeometry(.4,.8,3),wm);w.scale.set(1,1,.2);w.position.set(sx*1.0,1.3,-.4);w.rotation.z=sx*-.8;w.rotation.y=sx*.5;g.add(w);}
+    const tail=new THREE.Mesh(new THREE.CapsuleGeometry(.15,.6,8,12),main);tail.position.set(0,.7,-1.1);tail.rotation.x=-.8;g.add(tail);
+    const sp=new THREE.Mesh(new THREE.ConeGeometry(.12,.25,8),hm);sp.position.set(0,1.0,-1.35);sp.rotation.x=-1;g.add(sp);
+  } else if(s==='unicorn'){
+    const horn=new THREE.ConeGeometry(.12,.6,12);const hm=new THREE.MeshStandardMaterial({color:0xffd166,roughness:.2,metalness:.6,emissive:0x6a4a00,emissiveIntensity:.3});
+    const h=new THREE.Mesh(horn,hm);h.position.set(0,2.2,.1);g.add(h);
+    const eg=new THREE.ConeGeometry(.2,.35,10);ear(-.45,eg,main,.3);ear(.45,eg,main,-.3);
+    // 鬃毛
+    const mm=mat(0xff6fa5,.5);for(let i=0;i<4;i++){const m=new THREE.Mesh(new THREE.SphereGeometry(.2,16,16),mm);m.position.set(0,2.0-i*.25,-.5-i*.1);g.add(m);}
+    const tail=new THREE.Mesh(new THREE.CapsuleGeometry(.18,.6,8,12),mm);tail.position.set(0,.9,-1.05);tail.rotation.x=-.6;g.add(tail);
+  } else if(s==='penguin'){
+    // 喙
+    const beak=new THREE.Mesh(new THREE.ConeGeometry(.14,.3,10),mat(0xffa63d,.4));beak.position.set(0,1.15,.95);beak.rotation.x=Math.PI/2;g.add(beak);
+    // 鳍
+    const fm=mat(cfg.mainColor,.5);for(const sx of[-1,1]){const f=new THREE.Mesh(new THREE.SphereGeometry(.3,16,16),fm);f.scale.set(.3,1,.6);f.position.set(sx*1.0,1.0,0);f.rotation.z=sx*.3;g.add(f);}
+  } else if(s==='puppy'){
+    const eg=new THREE.SphereGeometry(.3,20,20);const eL=ear(-.6,eg,main);eL.scale.set(.6,1.2,.6);eL.position.y=1.7;
+    const eR=ear(.6,eg,main);eR.scale.set(.6,1.2,.6);eR.position.y=1.7;
+    const nose=new THREE.Mesh(new THREE.SphereGeometry(.09,12,12),dark);nose.position.set(0,1.12,.95);g.add(nose);
+    const tail=new THREE.Mesh(new THREE.CapsuleGeometry(.12,.4,8,12),main);tail.position.set(0,1.0,-1.0);tail.rotation.x=-1;g.add(tail);
+  } else if(s==='slime'){
+    // 触角
+    const am=mat(cfg.bellyColor,.3);const a=new THREE.Mesh(new THREE.CylinderGeometry(.03,.03,.4,8),am);a.position.set(0,2.2,0);g.add(a);
+    const ball=new THREE.Mesh(new THREE.SphereGeometry(.12,16,16),mat(0xffd166,.2));ball.position.set(0,2.42,0);g.add(ball);
+    body2gloss(g);
+  }
+}
+function body2gloss(g){ g.traverse(o=>{if(o.isMesh&&o.material&&o.material.color&&o.geometry.type==='SphereGeometry'&&o.geometry.parameters.radius>=1){o.material.roughness=.15;o.material.metalness=.1;}}); }
+
+function addAccessory(g,cfg){
+  const a=cfg.accessory;
+  if(a==='bow'){const bm=mat(0xff5d8a,.4);const bL=new THREE.Mesh(new THREE.SphereGeometry(.2,16,16),bm);bL.scale.set(1.3,.8,.5);bL.position.set(-.2,2.05,.3);const bR=bL.clone();bR.position.x=.2;const k=new THREE.Mesh(new THREE.SphereGeometry(.1,12,12),bm);k.position.set(0,2.05,.35);g.add(bL,bR,k);}
+  else if(a==='scarf'){const sm=mat(0xff6fa5,.6);const s=new THREE.Mesh(new THREE.TorusGeometry(.85,.16,16,40),sm);s.position.set(0,.55,0);s.rotation.x=Math.PI/2;g.add(s);const tail=new THREE.Mesh(new THREE.CapsuleGeometry(.14,.4,8,12),sm);tail.position.set(.5,.3,.6);g.add(tail);}
+  else if(a==='crown'){const cm=new THREE.MeshStandardMaterial({color:0xffd166,roughness:.25,metalness:.7,emissive:0x6a4a00,emissiveIntensity:.3});const b=new THREE.Mesh(new THREE.CylinderGeometry(.35,.4,.2,20),cm);b.position.set(0,2.15,0);g.add(b);for(let i=0;i<5;i++){const p=new THREE.Mesh(new THREE.ConeGeometry(.07,.2,8),cm);const ang=(i/5)*Math.PI*2;p.position.set(Math.cos(ang)*.32,2.32,Math.sin(ang)*.32);g.add(p);}}
+  else if(a==='glasses'){const gm=mat(0x3a3a4a,.3);const rL=new THREE.Mesh(new THREE.TorusGeometry(.26,.035,12,32),gm);rL.position.set(-.36,1.35,.9);const rR=rL.clone();rR.position.x=.36;const br=new THREE.Mesh(new THREE.CylinderGeometry(.02,.02,.24,8),gm);br.rotation.z=Math.PI/2;br.position.set(0,1.35,.92);g.add(rL,rR,br);}
+  else if(a==='flower'){const fm=mat(0xffd166,.4);const pm=mat(0xff6fa5,.4);for(let i=0;i<5;i++){const p=new THREE.Mesh(new THREE.SphereGeometry(.1,12,12),pm);const ang=(i/5)*Math.PI*2;p.position.set(.55+Math.cos(ang)*.12,2.0+Math.sin(ang)*.12,.3);g.add(p);}const c=new THREE.Mesh(new THREE.SphereGeometry(.08,12,12),fm);c.position.set(.55,2.0,.35);g.add(c);}
+}
+
+function rebuild(){if(pet){scene.remove(pet);pet.traverse(function(o){if(o.geometry)o.geometry.dispose();if(o.material&&o.material.dispose)o.material.dispose();});}pet=buildPet(state);scene.add(pet);}
+rebuild();
+
+let anim='idle',t=0;const clock=new THREE.Clock();
+function tick(){requestAnimationFrame(tick);const dt=clock.getDelta();t+=dt;controls.update(dt);stars.rotation.y+=dt*.02;
+  if(pet){const{root,body,handL,handR,eyeL,eyeR,footL,footR}=rig;
+    const breathe=1+Math.sin(t*2)*.02;body.scale.set(breathe,1.05/breathe,.95);
+    root.position.y=Math.sin(t*2)*.03;root.rotation.y=0;root.rotation.z=0;
+    handL.rotation.z=Math.sin(t*2)*.1;handR.rotation.z=-Math.sin(t*2)*.1;
+    // 眨眼
+    const blink=(Math.sin(t*.7)>0.98)?0.1:1;eyeL.scale.y=blink;eyeR.scale.y=blink;
+    if(anim==='wave'){handR.rotation.z=-2.2+Math.sin(t*8)*.5;}
+    else if(anim==='jump'){const j=Math.abs(Math.sin(t*4));root.position.y=j*.7;handL.rotation.z=j*1.5;handR.rotation.z=-j*1.5;footL.position.y=.18+j*.2;footR.position.y=.18+j*.2;}
+    else if(anim==='dance'){root.rotation.y=Math.sin(t*3)*.5;root.position.y=Math.abs(Math.sin(t*6))*.2;root.rotation.z=Math.sin(t*6)*.1;handL.rotation.z=Math.sin(t*6)*1.3;handR.rotation.z=Math.cos(t*6)*1.3;}
+    else if(anim==='spin'){root.rotation.y=t*3;handL.rotation.z=1.2;handR.rotation.z=-1.2;}
+  }
+  renderer.render(scene,camera);}
+tick();
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);frame();});
+
+const $=id=>document.getElementById(id);
+function swatches(el,colors,key){el.innerHTML='';colors.forEach(c=>{const d=document.createElement('div');d.className='sw'+(state[key]===c?' on':'');d.style.background=c;d.onclick=()=>{state[key]=c;[...el.children].forEach(x=>x.classList.remove('on'));d.classList.add('on');rebuild();};el.appendChild(d);});}
+swatches($('mainColor'),MAIN_COLORS,'mainColor');swatches($('bellyColor'),BELLY_COLORS,'bellyColor');
+$('species').onchange=e=>{state.species=e.target.value;rebuild();syncGallery();};
+$('accessory').onchange=e=>{state.accessory=e.target.value;rebuild();};
+$('eyeSize').oninput=e=>{state.eyeSize=+e.target.value;$('eyeOut').textContent=state.eyeSize.toFixed(2);rebuild();};
+$('plump').oninput=e=>{state.plump=+e.target.value;$('plumpOut').textContent=state.plump.toFixed(2);rebuild();};
+function toggle(el,cb){el.onclick=()=>{el.classList.toggle('on');cb(el.classList.contains('on'));};}
+toggle($('blushToggle'),on=>{state.blush=on;rebuild();});
+toggle($('rotateToggle'),on=>controls.autoRotate=on);
+toggle($('starsToggle'),on=>stars.visible=on);
+$('animBar').querySelectorAll('.chip').forEach(c=>c.onclick=()=>{anim=c.dataset.anim;$('animBar').querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));c.classList.add('on');});
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+$('randBtn').onclick=()=>{state.species=pick(['fox','cat','bunny','panda','dragon','unicorn','penguin','puppy','slime']);state.mainColor=pick(MAIN_COLORS);state.bellyColor=pick(BELLY_COLORS);state.accessory=pick(['none','bow','scarf','crown','glasses','flower']);state.eyeSize=+(0.7+Math.random()*.8).toFixed(2);state.plump=+(0.8+Math.random()*.55).toFixed(2);syncUI();rebuild();};
+$('resetBtn').onclick=()=>{Object.assign(state,{species:'fox',mainColor:MAIN_COLORS[0],bellyColor:BELLY_COLORS[0],accessory:'none',eyeSize:1,plump:1,blush:true});syncUI();rebuild();};
+$('shotBtn').onclick=()=>{renderer.render(scene,camera);const a=document.createElement('a');a.download='pet.png';a.href=renderer.domElement.toDataURL('image/png');a.click();};
+function syncUI(){$('species').value=state.species;$('accessory').value=state.accessory;$('eyeSize').value=state.eyeSize;$('eyeOut').textContent=state.eyeSize.toFixed(2);$('plump').value=state.plump;$('plumpOut').textContent=state.plump.toFixed(2);swatches($('mainColor'),MAIN_COLORS,'mainColor');swatches($('bellyColor'),BELLY_COLORS,'bellyColor');syncGallery();}
+
+const PETS=[['fox','🦊','小狐狸','#ff9a5c'],['cat','🐱','小猫咪','#ffb3c8'],['bunny','🐰','小兔子','#f5f0ff'],['panda','🐼','小熊猫','#ffffff'],['dragon','🐲','小火龙','#5fe3b3'],['unicorn','🦄','独角兽','#b388ff'],['penguin','🐧','小企鹅','#5fc8ff'],['puppy','🐶','小狗狗','#8a6a50'],['slime','🫧','史莱姆','#ffd166']];
+const gal=$('gallery');
+PETS.forEach(([id,emoji,name,color])=>{const d=document.createElement('div');d.className='pet'+(state.species===id?' on':'');d.dataset.id=id;d.innerHTML=`<div class="face" style="background:${color}33">${emoji}</div><div class="g">${name}</div>`;d.onclick=()=>{state.species=id;state.mainColor=color==='#ffffff'?MAIN_COLORS[6]:color;syncUI();rebuild();};gal.appendChild(d);});
+function syncGallery(){gal.querySelectorAll('.pet').forEach(x=>x.classList.toggle('on',x.dataset.id===state.species));}
+
+/* 移动端：换装工坊收进底部抽屉，宠物全屏当主角 */
+const panel=$('panel'),scrim=$('scrim');
+function openPanel(){panel.classList.add('open');scrim.classList.add('on');}
+function closePanel(){panel.classList.remove('open');scrim.classList.remove('on');}
+$('fab').onclick=openPanel;
+scrim.onclick=closePanel;
+$('panelClose').onclick=closePanel;
+$('panelGrip').onclick=closePanel;
+function frame(){var mobile=innerWidth<=820;controls.target.set(0,mobile?0.8:1.1,0);controls.tRadius=mobile?9.5:8;controls.radius=controls.tRadius;}
+frame();
+</script>
+</body>
+</html>
